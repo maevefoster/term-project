@@ -53,7 +53,7 @@ memcheck: $(TESTS)
 
 # Live run: needs the webcam. SIGINT after MEMCHECK_SECS triggers clean shutdown.
 memcheck-cam: $(BUILD)/cam_proc
-	timeout -s INT $(MEMCHECK_SECS) $(VALGRIND) ./$(BUILD)/cam_proc --log memcheck.log
+	timeout --preserve-status -s INT $(MEMCHECK_SECS) $(VALGRIND) ./$(BUILD)/cam_proc --log memcheck.log
 
 # Repository safeguard only; it does not replace manual review.
 BOUNDARY_PATTERN := AF_INET|getaddrinfo|gethostbyname|curl|https?://|mediapipe|movenet|tflite|tensorflow|onnx|cv::dnn|imwrite|stbi_write|\.(jpe?g|png|ppm|pgm|bmp|yuv)\b
