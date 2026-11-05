@@ -212,7 +212,7 @@ A basic `imu_proc` reads the MPU-6050 and reports raw values. It has no filter, 
 - The console shows the current values at 10 Hz. Without a current reading it shows the status instead.
 
 ### Absent handling
-5 consecutive read errors close the bus and log `IMU_ABSENT` once. Setup is retried after 1, 2, 4, then every 5 s. The 5 s cap keeps replug recovery inside the 10 s target. Permission errors on the device are `IMU_FATAL`: the process exits 1. A chip that resets after setup has passed, while still answering on the bus without error, is not detected yet.
+5 consecutive read errors close the bus and log `IMU_ABSENT` once. Setup is retried after 1, 2, 4, then every 5 s. The 5 s cap keeps replug recovery inside the 10 s target. Permission errors on the device are `IMU_FATAL`: the process exits 1. An all-zero burst counts as a failed read, because a chip that resets after setup keeps answering on the bus but returns only zeros. This extends the M2 trigger, which lists I2C errors only; such a record shows `i2c_err=5 op=all_zero_burst errno=0`, and those reads are included in the `i2c_errors` counts. Data frozen at non-zero values is not detected.
 
 ### Log events
 Same record format as the M3 log format above. The failure table's `-> DEGRADED(cam-only)` suffix is left out because there is no hub to enter that state.

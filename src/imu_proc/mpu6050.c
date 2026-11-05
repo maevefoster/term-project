@@ -153,6 +153,12 @@ int mpu_read_raw(struct mpu_dev *d, struct mpu_raw *out)
         d->last_errno = errno;
         return -1;
     }
+    /* The bus is fine but the chip reset and went back to sleep. */
+    if (mpu_burst_all_zero(burst)) {
+        d->last_op = "all_zero_burst";
+        d->last_errno = 0;
+        return -1;
+    }
     mpu_parse(burst, out);
     return 0;
 }

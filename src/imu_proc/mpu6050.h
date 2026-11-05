@@ -56,7 +56,8 @@ void mpu_init(struct mpu_dev *d);
 enum mpu_result mpu_open(struct mpu_dev *d, const char *path, uint16_t addr);
 
 /* Reads all sensors in one I2C_RDWR burst. Returns 0, or -1 with last_op and
- * last_errno set. The device stays open: the caller counts failures. */
+ * last_errno set, for a bus error or an all-zero burst (last_errno 0). The
+ * device stays open: the caller counts failures. */
 int mpu_read_raw(struct mpu_dev *d, struct mpu_raw *out);
 
 void mpu_close(struct mpu_dev *d);

@@ -2,9 +2,9 @@
  * on the console and appends status/summary records to its own log file.
  *
  * Runs under the default scheduler for now; SCHED_FIFO, the complementary
- * filter and the socket to hub come later. After 5 consecutive I2C errors
- * the sensor is reported ABSENT and retried with a backoff; the process
- * never exits for a missing sensor.
+ * filter and the socket to hub come later. After 5 consecutive failed reads
+ * (I2C errors or all-zero data) the sensor is reported ABSENT and retried
+ * with a backoff; the process never exits for a missing sensor.
  */
 #include <errno.h>
 #include <getopt.h>
@@ -26,7 +26,7 @@
 #define IMU_RATE_HZ     100
 #define IMU_PERIOD_NS   (NS_PER_S / IMU_RATE_HZ)
 #define IMU_CONSOLE_DIV 10 /* ticks per console update: 10 Hz */
-#define IMU_ERR_LIMIT   5  /* consecutive I2C errors before ABSENT */
+#define IMU_ERR_LIMIT   5  /* consecutive failed reads before ABSENT */
 #define IMU_HEALTH_S    3600
 
 /* Placeholder until the team decides (CLAUDE.md section 8). */
