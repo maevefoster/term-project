@@ -206,12 +206,13 @@ A basic `imu_proc` reads the MPU-6050 and reports raw values. It has no filter, 
 ### Sensor access
 - `/dev/i2c-1`, address `0x68`. `WHO_AM_I` must read `0x68`; any other value is treated as ABSENT and logged as `who_am_i=0x..`.
 - Setup writes `PWR_MGMT_1 = 0x01` (awake, PLL with X gyro reference), gyro ±250 °/s and accel ±2 g. `SMPLRT_DIV` and the DLPF stay as the chip has them. Setup runs again on every reconnect.
+- Setup is then verified: after a 100 ms wait, `PWR_MGMT_1` must read back `0x01` and one burst must contain non-zero data. If not, the sensor stays ABSENT (`op=verify_awake` or `op=verify_zero_data`) and setup is retried on the normal schedule. A chip that reset during setup acknowledges writes but sleeps and returns zeros.
 - One 14-byte `I2C_RDWR` burst from `ACCEL_XOUT_H` every 10 ms, on `clock_nanosleep` `ABSTIME` deadlines. After an overrun the loop continues from the current time. Each sample is timestamped with `CLOCK_MONOTONIC`.
 - Conversion (register map RM-MPU-6000A-00 rev 4.2): 16384 LSB/g, 131 LSB/(°/s), temperature = raw / 340 + 36.53.
 - The console shows the current values at 10 Hz. Without a current reading it shows the status instead.
 
 ### Absent handling
-5 consecutive read errors close the bus and log `IMU_ABSENT` once. Setup is retried after 1, 2, 4, then every 5 s. The 5 s cap keeps replug recovery inside the 10 s target. Permission errors on the device are `IMU_FATAL`: the process exits 1. A chip that loses power but still answers on the bus without error is not detected.
+5 consecutive read errors close the bus and log `IMU_ABSENT` once. Setup is retried after 1, 2, 4, then every 5 s. The 5 s cap keeps replug recovery inside the 10 s target. Permission errors on the device are `IMU_FATAL`: the process exits 1. A chip that resets after setup has passed, while still answering on the bus without error, is not detected yet.
 
 ### Log events
 Same record format as the M3 log format above. The failure table's `-> DEGRADED(cam-only)` suffix is left out because there is no hub to enter that state.

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <linux/i2c.h>
@@ -19,6 +20,10 @@
 #define PWR_CLKSEL_PLL_XGYRO 0x01 /* SLEEP clear, PLL with X gyro reference */
 #define GYRO_FS_SEL_250      0x00
 #define ACCEL_AFS_SEL_2G     0x00
+
+/* Wait before checking setup: covers the longest register start-up time
+ * listed in the MPU-6050 product specification (100 ms). */
+#define WAKE_SETTLE_NS 100000000L
 
 #define ACCEL_LSB_PER_G    16384.0
 #define GYRO_LSB_PER_DPS   131.0
@@ -78,6 +83,36 @@ void mpu_close(struct mpu_dev *d)
     d->fd = -1;
 }
 
+int mpu_burst_all_zero(const uint8_t burst[MPU_BURST_LEN])
+{
+    for (size_t i = 0; i < MPU_BURST_LEN; i++)
+        if (burst[i] != 0)
+            return 0;
+    return 1;
+}
+
+/* A chip that reset during setup still answers on the bus, but sleeps and
+ * returns zeros, so a write being acknowledged doesn't prove it took effect. */
+static enum mpu_result verify_awake(struct mpu_dev *d)
+{
+    const struct timespec settle = { .tv_sec = 0, .tv_nsec = WAKE_SETTLE_NS };
+    uint8_t burst[MPU_BURST_LEN];
+    uint8_t pwr;
+
+    /* EINTR is fine: a short wait can only fail this check and retry. */
+    (void)nanosleep(&settle, NULL);
+
+    if (reg_read(d, REG_PWR_MGMT_1, &pwr, 1) < 0)
+        return setup_fail(d, "verify_pwr_mgmt_1", errno, MPU_GONE);
+    if (pwr != PWR_CLKSEL_PLL_XGYRO)
+        return setup_fail(d, "verify_awake", 0, MPU_GONE);
+    if (reg_read(d, REG_ACCEL_XOUT_H, burst, sizeof burst) < 0)
+        return setup_fail(d, "verify_burst", errno, MPU_GONE);
+    if (mpu_burst_all_zero(burst))
+        return setup_fail(d, "verify_zero_data", 0, MPU_GONE);
+    return MPU_OK;
+}
+
 enum mpu_result mpu_open(struct mpu_dev *d, const char *path, uint16_t addr)
 {
     mpu_close(d);
@@ -106,7 +141,7 @@ enum mpu_result mpu_open(struct mpu_dev *d, const char *path, uint16_t addr)
         return setup_fail(d, "gyro_config", errno, MPU_GONE);
     if (reg_write(d, REG_ACCEL_CONFIG, ACCEL_AFS_SEL_2G) < 0)
         return setup_fail(d, "accel_config", errno, MPU_GONE);
-    return MPU_OK;
+    return verify_awake(d);
 }
 
 int mpu_read_raw(struct mpu_dev *d, struct mpu_raw *out)

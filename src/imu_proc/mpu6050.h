@@ -8,6 +8,7 @@
 #ifndef POSTURE_MPU6050_H
 #define POSTURE_MPU6050_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define MPU_DEFAULT_ADDR 0x68
@@ -48,8 +49,9 @@ struct mpu_dev {
 
 void mpu_init(struct mpu_dev *d);
 
-/* Opens the bus, checks WHO_AM_I, wakes the chip and sets the ranges. Must
- * run again after any reconnect: a power-cycled chip comes back asleep. On
+/* Opens the bus, checks WHO_AM_I, wakes the chip and sets the ranges, then
+ * waits 100 ms and confirms the chip is awake and returning data. Must run
+ * again after any reconnect: a power-cycled chip comes back asleep. On
  * failure the device is closed again. */
 enum mpu_result mpu_open(struct mpu_dev *d, const char *path, uint16_t addr);
 
@@ -58,6 +60,10 @@ enum mpu_result mpu_open(struct mpu_dev *d, const char *path, uint16_t addr);
 int mpu_read_raw(struct mpu_dev *d, struct mpu_raw *out);
 
 void mpu_close(struct mpu_dev *d);
+
+/* True if every byte of a burst is zero, as a sleeping chip returns. An awake
+ * chip always shows gravity, so this never happens with real data. */
+int mpu_burst_all_zero(const uint8_t burst[MPU_BURST_LEN]);
 
 /* Decodes a burst: big-endian pairs of accel xyz, temperature, gyro xyz. */
 void mpu_parse(const uint8_t burst[MPU_BURST_LEN], struct mpu_raw *out);

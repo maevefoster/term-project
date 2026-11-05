@@ -61,6 +61,17 @@ static void test_parse_negative(void)
     CHECK(r.temp == 0);
 }
 
+static void test_all_zero(void)
+{
+    static const uint8_t zeros[MPU_BURST_LEN] = { 0 };
+    static const uint8_t first[MPU_BURST_LEN] = { 0x01 };
+    static const uint8_t last[MPU_BURST_LEN] = { [MPU_BURST_LEN - 1] = 0x01 };
+
+    CHECK(mpu_burst_all_zero(zeros));
+    CHECK(!mpu_burst_all_zero(first));
+    CHECK(!mpu_burst_all_zero(last));
+}
+
 static void test_scale(void)
 {
     /* Register map: 16384 LSB/g at +-2 g, 131 LSB/(deg/s) at +-250 deg/s,
@@ -86,6 +97,7 @@ int main(void)
 {
     test_parse_order_and_endianness();
     test_parse_negative();
+    test_all_zero();
     test_scale();
 
     if (failures) {
