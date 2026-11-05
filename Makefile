@@ -1,6 +1,6 @@
 # posture-coach build (Linux / Raspberry Pi OS).
 #
-#   make                 build build/cam_proc
+#   make                 build build/cam_proc and build/imu_proc
 #   make test            build and run host unit tests
 #   make asan            rebuild everything with ASan+UBSan and run the tests
 #   make memcheck        run the unit tests under valgrind
@@ -11,7 +11,7 @@
 CC       ?= cc
 CSTD     := -std=c17
 WARN     := -Wall -Wextra -Werror -Wvla
-CPPFLAGS := -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc/common -Isrc/cam_proc
+CPPFLAGS := -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc/common -Isrc/cam_proc -Isrc/imu_proc
 CFLAGS   ?= -O2 -g
 SAN      := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 
@@ -22,13 +22,15 @@ VALGRIND := valgrind --leak-check=full --show-leak-kinds=definite,indirect --tra
 COMMON_SRC := src/common/applog.c
 CAM_SRC    := src/cam_proc/main.c src/cam_proc/v4l2_cap.c src/cam_proc/frame_stats.c \
               src/cam_proc/markers.c src/cam_proc/posture_detect.c
-TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_posture_detect
+IMU_SRC    := src/imu_proc/main.c src/imu_proc/mpu6050.c
+TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_posture_detect \
+              $(BUILD)/test_mpu6050
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
 .PHONY: all test asan memcheck memcheck-cam boundarycheck deploy soakcheck jitterbench clean
 
-all: $(BUILD)/cam_proc
+all: $(BUILD)/cam_proc $(BUILD)/imu_proc
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -36,6 +38,12 @@ $(BUILD)/%.o: %.c
 
 $(BUILD)/cam_proc: $(call obj,$(CAM_SRC) $(COMMON_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
+
+$(BUILD)/imu_proc: $(call obj,$(IMU_SRC) $(COMMON_SRC))
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
+
+$(BUILD)/test_mpu6050: $(call obj,tests/test_mpu6050.c src/imu_proc/mpu6050.c)
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
 
 $(BUILD)/test_applog: $(call obj,tests/test_applog.c $(COMMON_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
@@ -72,7 +80,7 @@ deploy:
 ifndef PI
 	$(error usage: make deploy PI=pi@<host>)
 endif
-	rsync -az --delete --exclude .git --exclude 'build*' --exclude 'posture.log*' ./ $(PI):posture-coach/
+	rsync -az --delete --exclude .git --exclude 'build*' --exclude 'posture.log*' --exclude 'imu.log*' ./ $(PI):posture-coach/
 
 soakcheck jitterbench:
 	@echo "$@: not implemented in M3"; exit 1

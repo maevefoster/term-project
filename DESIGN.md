@@ -191,3 +191,38 @@ One record per line:
 | Summary interval | 10 s (per-frame lines would be about 430k/day) | `CAM_SUMMARY_S` in `src/cam_proc/main.c` |
 | Whether one rotated `.1` copy fits "single log file" | allowed | `applog.c` `rotate()` |
 | Disk-space (<10%) and thermal checks | not in cam_proc; belong to hub | — |
+
+## Interim decisions: basic imu_proc
+
+A basic `imu_proc` reads the MPU-6050 and reports raw values. It has no filter, no `SCHED_FIFO` and no hub connection yet. These are deliberate, temporary deviations from the M2 design:
+
+| # | Deviation | M2 design | Reverts when |
+|---|---|---|---|
+| 1 | `imu_proc` writes its own log, `./imu.log` (`--log PATH` overrides) | Only `hub` persists application logs | hub exists |
+| 2 | Default scheduler | `SCHED_FIFO`, priority 80 | mechanism C work starts |
+| 3 | No pitch; converted accel, gyro and temperature only | Complementary filter gives pitch | Maeve implements the filter |
+| 4 | No IPC, no supervisor. Started by hand | UDS to hub at 10 Hz, 1 Hz heartbeat | mechanism E integration |
+
+### Sensor access
+- `/dev/i2c-1`, address `0x68`. `WHO_AM_I` must read `0x68`; any other value is treated as ABSENT and logged as `who_am_i=0x..`.
+- Setup writes `PWR_MGMT_1 = 0x01` (awake, PLL with X gyro reference), gyro ±250 °/s and accel ±2 g. `SMPLRT_DIV` and the DLPF stay as the chip has them. Setup runs again on every reconnect.
+- One 14-byte `I2C_RDWR` burst from `ACCEL_XOUT_H` every 10 ms, on `clock_nanosleep` `ABSTIME` deadlines. After an overrun the loop continues from the current time. Each sample is timestamped with `CLOCK_MONOTONIC`.
+- Conversion (register map RM-MPU-6000A-00 rev 4.2): 16384 LSB/g, 131 LSB/(°/s), temperature = raw / 340 + 36.53.
+- The console shows the current values at 10 Hz. Without a current reading it shows the status instead.
+
+### Absent handling
+5 consecutive read errors close the bus and log `IMU_ABSENT` once. Setup is retried after 1, 2, 4, then every 5 s. The 5 s cap keeps replug recovery inside the 10 s target. Permission errors on the device are `IMU_FATAL`: the process exits 1. A chip that loses power but still answers on the bus without error is not detected.
+
+### Log events
+Same record format as the M3 log format above. The failure table's `-> DEGRADED(cam-only)` suffix is left out because there is no hub to enter that state.
+
+- `IMU_START`, `IMU_OPEN`, `IMU_ABSENT`, `IMU_RECONNECTED`, `IMU_FATAL`, `IMU_STOP`, `HEALTH` (hourly: uptime, RSS, totals), `LOG_TORN_REPAIRED`, `LOG_ROTATED`.
+- `IMU_SUMMARY` every 10 s: status, window, sample and error counts, plus the latest reading and its age. The reading is omitted when none is current. Individual samples are not logged (about 8.6 million lines a day at 100 Hz).
+
+### Open decisions (placeholders, team to confirm)
+| Item | Placeholder | Where |
+|---|---|---|
+| Summary interval | 10 s | `IMU_SUMMARY_S` in `src/imu_proc/main.c` |
+| Retry backoff | 1, 2, 4, 5 s | `retry_delay_s` in `src/imu_proc/main.c` |
+| DLPF and sample-rate divider | left unset | `src/imu_proc/mpu6050.c` |
+| Log size cap | 5 MiB plus one rotated copy, shared with the camera log | `APPLOG_CAP` in `src/common/applog.h` |

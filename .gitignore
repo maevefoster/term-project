@@ -2,5 +2,7 @@ build/
 build-asan/
 posture.log
 posture.log.1
+imu.log
+imu.log.1
 memcheck.log
 memcheck.log.1
