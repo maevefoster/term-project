@@ -20,8 +20,9 @@ MEMCHECK_SECS ?= 60
 VALGRIND := valgrind --leak-check=full --show-leak-kinds=definite,indirect --track-fds=yes --error-exitcode=1
 
 COMMON_SRC := src/common/applog.c
-CAM_SRC    := src/cam_proc/main.c src/cam_proc/v4l2_cap.c src/cam_proc/frame_stats.c src/cam_proc/markers.c
-TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats
+CAM_SRC    := src/cam_proc/main.c src/cam_proc/v4l2_cap.c src/cam_proc/frame_stats.c \
+              src/cam_proc/markers.c src/cam_proc/posture_detect.c
+TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_posture_detect
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
@@ -34,13 +35,16 @@ $(BUILD)/%.o: %.c
 	$(CC) $(CSTD) $(WARN) $(CPPFLAGS) $(CFLAGS) $(EXTRA_CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/cam_proc: $(call obj,$(CAM_SRC) $(COMMON_SRC))
-	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
 
 $(BUILD)/test_applog: $(call obj,tests/test_applog.c $(COMMON_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
 
 $(BUILD)/test_frame_stats: $(call obj,tests/test_frame_stats.c src/cam_proc/frame_stats.c)
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
+
+$(BUILD)/test_posture_detect: $(call obj,tests/test_posture_detect.c src/cam_proc/markers.c src/cam_proc/posture_detect.c)
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
 
 test: $(TESTS)
 	@set -e; for t in $(TESTS); do echo "== $$t"; ./$$t; done

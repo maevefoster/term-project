@@ -170,17 +170,26 @@ static int try_open(struct cam_ctx *c)
 static void log_summary(struct cam_ctx *c, int64_t now)
 {
     struct frame_summary s;
+    struct marker_stats m;
 
     fstats_summary(&c->stats, now, &s);
+    markers_take_stats(&m);
+    /* cva_deg/cva_conf are the last valid observation (-1 if none yet);
+     * derived numbers only, never pixel data. */
     applog_write(&c->log, "CAM_SUMMARY",
                  "status=%s window_ms=%lld frames=%llu fps=%.2f iv_min_ms=%.1f "
                  "iv_p50_ms=%.1f iv_max_ms=%.1f dropped=%llu stalls=%llu bad=%llu "
-                 "open_failures=%llu",
+                 "open_failures=%llu mk_frames=%llu mk_found=%llu mk_none=%llu "
+                 "mk_skip=%llu cva_deg=%.1f cva_conf=%.2f",
                  sensor_status_name(c->status), (long long)(s.window_ns / NS_PER_MS),
                  (unsigned long long)s.frames, s.fps, ns_to_ms(s.iv_min_ns),
                  ns_to_ms(s.iv_p50_ns), ns_to_ms(s.iv_max_ns),
                  (unsigned long long)s.dropped, (unsigned long long)s.stalls,
-                 (unsigned long long)s.bad_frames, (unsigned long long)c->open_failures);
+                 (unsigned long long)s.bad_frames, (unsigned long long)c->open_failures,
+                 (unsigned long long)m.frames, (unsigned long long)m.found,
+                 (unsigned long long)m.no_user, (unsigned long long)m.skipped,
+                 m.have_last ? (double)m.last_cva_deg : -1.0,
+                 m.have_last ? (double)m.last_conf : -1.0);
 }
 
 static void log_health(struct cam_ctx *c, int64_t uptime_ns)
