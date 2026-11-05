@@ -5,6 +5,7 @@
 #   make asan            rebuild everything with ASan+UBSan and run the tests
 #   make memcheck        run the unit tests under valgrind
 #   make memcheck-cam    run cam_proc under valgrind for MEMCHECK_SECS (Pi, live camera)
+#   make camdebug        build build/cam_debug, the live marker debug viewer (Pi desktop, SDL2)
 #   make boundarycheck   grep src/ for network, model and image-writing APIs
 #   make deploy PI=pi@<host>
 
@@ -28,7 +29,7 @@ TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_postu
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
-.PHONY: all test asan memcheck memcheck-cam boundarycheck deploy soakcheck jitterbench clean
+.PHONY: all test asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean
 
 all: $(BUILD)/cam_proc $(BUILD)/imu_proc
 
@@ -41,6 +42,16 @@ $(BUILD)/cam_proc: $(call obj,$(CAM_SRC) $(COMMON_SRC))
 
 $(BUILD)/imu_proc: $(call obj,$(IMU_SRC) $(COMMON_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
+
+# Live on-screen marker debug viewer (Pi desktop + libsdl2-dev). Not part of
+# `all`, `test` or `asan`. tools/cam_debug.c #includes posture_detect.c.
+camdebug:
+	@pkg-config --exists sdl2 || { echo "camdebug: SDL2 not found; run: sudo apt install -y pkg-config libsdl2-dev"; exit 1; }
+	$(MAKE) $(BUILD)/cam_debug
+
+$(BUILD)/tools/cam_debug.o: CPPFLAGS += $(shell pkg-config --cflags sdl2 2>/dev/null)
+$(BUILD)/cam_debug: $(call obj,tools/cam_debug.c src/cam_proc/v4l2_cap.c)
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) $(shell pkg-config --libs sdl2 2>/dev/null) -lm -o $@
 
 $(BUILD)/test_mpu6050: $(call obj,tests/test_mpu6050.c src/imu_proc/mpu6050.c)
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
