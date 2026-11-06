@@ -1,0 +1,102 @@
+LIVE RUN (not replay): tools/cam_debug on Raspberry Pi 4 (goober-pi), 2026-11-05.
+Terminal output pasted by Tiffany, stored as captured. Numbers only: no camera
+frames or images were saved (CLAUDE.md camera-privacy rule).
+Build: branch camdebug-wip, commit b09bbf4. Default detector ranges, unchanged.
+Scene: hand-held Wii remotes (green, blue) as stand-ins; a blue poster was also
+in view. Lighting not measured. Each click was on a pixel of the target color.
+Fields: raw = pixels matching the color range; kept = after the detector's
+outlier step; found = detector accepted the blob; sig = blob spread in pixels
+(limit max_sigma_px=12); at = centroid (x,y); click line = H/S/V (5x5 average)
+and whether each range accepts it.
+-----------------------------------------------------------------------------
+^Cadmin@goober-pi:~/Documents/GitHub/term-project $ cd ~/Documents/GitHub/term-project && git pull && make camdebug && ./build/cam_debug
+remote: Enumerating objects: 41, done.
+remote: Counting objects: 100% (33/33), done.
+remote: Compressing objects: 100% (5/5), done.
+remote: Total 21 (delta 15), reused 21 (delta 15), pack-reused 0 (from 0)
+Unpacking objects: 100% (21/21), 3.66 KiB | 163.00 KiB/s, done.
+From https://github.com/maevefoster/term-project
+   ff124d8..b09bbf4  camdebug-wip -> origin/camdebug-wip
+   2fc6b8b..08e67bc  master       -> origin/master
+Updating ff124d8..b09bbf4
+Fast-forward
+ tools/cam_debug.c | 19 ++++++++++++++-----
+ 1 file changed, 14 insertions(+), 5 deletions(-)
+make build/cam_debug
+make[1]: Entering directory '/home/admin/Documents/GitHub/term-project'
+cc -std=c17 -Wall -Wextra -Werror -Wvla -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc/common -Isrc/cam_proc -Isrc/imu_proc -I/usr/include/SDL2 -D_REENTRANT  -O2 -g  -MMD -MP -c tools/cam_debug.c -o build/tools/cam_debug.o
+cc -O2 -g  build/tools/cam_debug.o build/src/cam_proc/v4l2_cap.o  -lSDL2  -lm -o build/cam_debug
+make[1]: Leaving directory '/home/admin/Documents/GitHub/term-project'
+cam_debug: /dev/video0 320x240, tpf=1/30 | detector limits: min_pixels=12 max_sigma_px=12.0 min_sep_px=15.0
+  red tint = detector says EAR (green range), yellow tint = C7 (blue range)
+  click a pixel for its H/S/V; t = toggle tint; q/Esc = quit
+EAR raw=159 kept=159 found=0 sig=156.3 at=(195,112) | C7 raw=95 kept=95 found=0 sig=111.8 at=(178,140) | NO_USER CVA=-1.0
+EAR raw=121 kept=121 found=0 sig=165.5 at=(157,128) | C7 raw=175 kept=171 found=0 sig=69.8 at=(179,112) | NO_USER CVA=-1.0
+EAR raw=85 kept=85 found=0 sig=143.7 at=(123,159) | C7 raw=318 kept=302 found=0 sig=53.6 at=(169,95) | NO_USER CVA=-1.0
+EAR raw=64 kept=64 found=0 sig=145.6 at=(120,170) | C7 raw=367 kept=349 found=0 sig=47.3 at=(169,89) | NO_USER CVA=-1.0
+EAR raw=47 kept=47 found=0 sig=172.4 at=(154,106) | C7 raw=467 kept=465 found=0 sig=77.2 at=(164,113) | NO_USER CVA=-1.0
+EAR raw=69 kept=69 found=0 sig=129.7 at=(109,136) | C7 raw=506 kept=506 found=0 sig=79.0 at=(174,116) | NO_USER CVA=-1.0
+EAR raw=138 kept=138 found=0 sig=112.1 at=(146,144) | C7 raw=534 kept=534 found=0 sig=80.7 at=(169,119) | NO_USER CVA=-1.0
+EAR raw=79 kept=79 found=0 sig=106.9 at=(123,143) | C7 raw=503 kept=503 found=0 sig=82.1 at=(170,117) | NO_USER CVA=-1.0
+EAR raw=95 kept=89 found=0 sig=64.7 at=(126,160) | C7 raw=520 kept=520 found=0 sig=83.4 at=(165,118) | NO_USER CVA=-1.0
+EAR raw=114 kept=106 found=0 sig=57.0 at=(109,160) | C7 raw=504 kept=503 found=0 sig=81.7 at=(173,118) | NO_USER CVA=-1.0
+EAR raw=98 kept=98 found=0 sig=98.1 at=(135,149) | C7 raw=561 kept=561 found=0 sig=84.1 at=(173,122) | NO_USER CVA=-1.0
+EAR raw=82 kept=82 found=0 sig=109.2 at=(128,144) | C7 raw=514 kept=513 found=0 sig=81.2 at=(173,116) | NO_USER CVA=-1.0
+click (138,158): H=154 S=1.00 V=0.27 | detector mask: EAR  | ear range ACCEPTS, c7 range rejects
+EAR raw=124 kept=124 found=0 sig=97.2 at=(137,145) | C7 raw=526 kept=526 found=0 sig=78.6 at=(177,119) | NO_USER CVA=-1.0
+click (138,158): H=160 S=0.95 V=0.25 | detector mask: EAR  | ear range rejects, c7 range rejects
+click (138,158): H=160 S=0.95 V=0.25 | detector mask: EAR  | ear range rejects, c7 range rejects
+EAR raw=91 kept=87 found=0 sig=71.6 at=(131,161) | C7 raw=543 kept=543 found=0 sig=81.6 at=(172,119) | NO_USER CVA=-1.0
+click (138,158): H=157 S=0.94 V=0.25 | detector mask: EAR  | ear range ACCEPTS, c7 range rejects
+EAR raw=112 kept=112 found=0 sig=97.6 at=(136,147) | C7 raw=505 kept=503 found=0 sig=77.3 at=(176,116) | NO_USER CVA=-1.0
+EAR raw=111 kept=111 found=0 sig=92.8 at=(139,149) | C7 raw=529 kept=529 found=0 sig=82.7 at=(170,117) | NO_USER CVA=-1.0
+EAR raw=100 kept=96 found=0 sig=60.1 at=(138,159) | C7 raw=508 kept=508 found=0 sig=82.6 at=(166,119) | NO_USER CVA=-1.0
+EAR raw=121 kept=121 found=0 sig=96.2 at=(149,146) | C7 raw=516 kept=516 found=0 sig=83.8 at=(164,117) | NO_USER CVA=-1.0
+EAR raw=117 kept=117 found=0 sig=110.5 at=(135,142) | C7 raw=506 kept=506 found=0 sig=78.7 at=(173,117) | NO_USER CVA=-1.0
+EAR raw=107 kept=107 found=0 sig=107.4 at=(149,137) | C7 raw=533 kept=533 found=0 sig=80.5 at=(172,117) | NO_USER CVA=-1.0
+EAR raw=121 kept=121 found=0 sig=102.6 at=(147,140) | C7 raw=492 kept=492 found=0 sig=78.8 at=(173,115) | NO_USER CVA=-1.0
+EAR raw=105 kept=99 found=0 sig=62.1 at=(110,165) | C7 raw=524 kept=524 found=0 sig=82.0 at=(172,118) | NO_USER CVA=-1.0
+qEAR raw=126 kept=126 found=0 sig=97.1 at=(130,150) | C7 raw=483 kept=483 found=0 sig=77.2 at=(173,114) | NO_USER CVA=-1.0
+admin@goober-pi:~/Documents/GitHub/term-project $ make camdebug && ./build/cam_debug^M^C
+admin@goober-pi:~/Documents/GitHub/term-project $ make camdebug && ./build/cam_debug
+make build/cam_debug
+make[1]: Entering directory '/home/admin/Documents/GitHub/term-project'
+make[1]: 'build/cam_debug' is up to date.
+make[1]: Leaving directory '/home/admin/Documents/GitHub/term-project'
+cam_debug: /dev/video0 320x240, tpf=1/30 | detector limits: min_pixels=12 max_sigma_px=12.0 min_sep_px=15.0
+  red tint = detector says EAR (green range), yellow tint = C7 (blue range)
+  click a pixel for its H/S/V; t = toggle tint; q/Esc = quit
+EAR raw=106 kept=106 found=0 sig=150.5 at=(133,141) | C7 raw=184 kept=181 found=0 sig=47.0 at=(155,143) | NO_USER CVA=-1.0
+EAR raw=110 kept=110 found=0 sig=148.5 at=(156,155) | C7 raw=276 kept=270 found=0 sig=50.7 at=(159,122) | NO_USER CVA=-1.0
+EAR raw=49 kept=49 found=0 sig=145.4 at=(174,150) | C7 raw=459 kept=439 found=0 sig=51.7 at=(162,107) | NO_USER CVA=-1.0
+EAR raw=46 kept=46 found=0 sig=147.2 at=(136,159) | C7 raw=471 kept=456 found=0 sig=47.7 at=(159,103) | NO_USER CVA=-1.0
+click (140,155): H=206 S=0.57 V=0.42 | detector mask:  | ear range rejects, c7 range ACCEPTS
+EAR raw=38 kept=38 found=0 sig=148.7 at=(176,152) | C7 raw=500 kept=480 found=0 sig=51.4 at=(158,104) | NO_USER CVA=-1.0
+EAR raw=48 kept=48 found=0 sig=155.8 at=(178,133) | C7 raw=528 kept=515 found=0 sig=61.6 at=(154,108) | NO_USER CVA=-1.0
+click (140,155): H=204 S=0.50 V=0.30 | detector mask:  | ear range rejects, c7 range ACCEPTS
+EAR raw=45 kept=45 found=0 sig=147.4 at=(164,175) | C7 raw=584 kept=579 found=0 sig=67.1 at=(156,111) | NO_USER CVA=-1.0
+EAR raw=42 kept=42 found=0 sig=144.4 at=(172,164) | C7 raw=564 kept=554 found=0 sig=65.2 at=(155,111) | NO_USER CVA=-1.0
+click (133,151): H=209 S=0.85 V=0.51 | detector mask: C7 | ear range rejects, c7 range ACCEPTS
+EAR raw=48 kept=48 found=0 sig=147.5 at=(163,154) | C7 raw=568 kept=563 found=0 sig=71.1 at=(155,112) | NO_USER CVA=-1.0
+click (135,151): H=209 S=1.00 V=0.56 | detector mask: C7 | ear range rejects, c7 range ACCEPTS
+EAR raw=52 kept=52 found=0 sig=142.8 at=(147,169) | C7 raw=568 kept=562 found=0 sig=70.8 at=(153,111) | NO_USER CVA=-1.0
+EAR raw=56 kept=56 found=0 sig=148.4 at=(130,154) | C7 raw=596 kept=596 found=0 sig=80.7 at=(154,118) | NO_USER CVA=-1.0
+click (131,162): H=215 S=0.46 V=0.38 | detector mask:  | ear range rejects, c7 range rejects
+click (134,162): H=229 S=0.38 V=0.45 | detector mask:  | ear range rejects, c7 range rejects
+EAR raw=41 kept=41 found=0 sig=137.4 at=(153,166) | C7 raw=519 kept=514 found=0 sig=72.0 at=(153,110) | NO_USER CVA=-1.0
+click (134,162): H=218 S=0.47 V=0.45 | detector mask:  | ear range rejects, c7 range rejects
+click (134,162): H=220 S=0.46 V=0.44 | detector mask:  | ear range rejects, c7 range rejects
+click (134,162): H=223 S=0.41 V=0.44 | detector mask:  | ear range rejects, c7 range rejects
+click (134,162): H=227 S=0.40 V=0.45 | detector mask:  | ear range rejects, c7 range rejects
+EAR raw=48 kept=48 found=0 sig=133.7 at=(198,163) | C7 raw=547 kept=542 found=0 sig=68.5 at=(156,110) | NO_USER CVA=-1.0
+click (134,162): H=228 S=0.41 V=0.46 | detector mask:  | ear range rejects, c7 range rejects
+click (134,162): H=210 S=0.78 V=0.57 | detector mask: C7 | ear range rejects, c7 range ACCEPTS
+EAR raw=34 kept=34 found=0 sig=141.0 at=(206,153) | C7 raw=583 kept=580 found=0 sig=74.6 at=(151,114) | NO_USER CVA=-1.0
+EAR raw=50 kept=50 found=0 sig=132.2 at=(164,177) | C7 raw=546 kept=539 found=0 sig=67.2 at=(154,107) | NO_USER CVA=-1.0
+EAR raw=51 kept=51 found=0 sig=142.6 at=(196,156) | C7 raw=568 kept=562 found=0 sig=71.8 at=(154,112) | NO_USER CVA=-1.0
+EAR raw=46 kept=46 found=0 sig=136.9 at=(177,177) | C7 raw=595 kept=592 found=0 sig=78.7 at=(152,115) | NO_USER CVA=-1.0
+EAR raw=53 kept=53 found=0 sig=136.2 at=(202,151) | C7 raw=597 kept=593 found=0 sig=72.6 at=(159,115) | NO_USER CVA=-1.0
+EAR raw=41 kept=41 found=0 sig=151.2 at=(173,163) | C7 raw=601 kept=597 found=0 sig=73.2 at=(152,114) | NO_USER CVA=-1.0
+EAR raw=50 kept=50 found=0 sig=156.1 at=(169,125) | C7 raw=612 kept=608 found=0 sig=70.4 at=(150,115) | NO_USER CVA=-1.0
+EAR raw=46 kept=46 found=0 sig=152.1 at=(182,140) | C7 raw=612 kept=606 found=0 sig=72.1 at=(153,114) | NO_USER CVA=-1.0
+^Cadmin@goober-pi:~/Documents/GitHub/term-project $
