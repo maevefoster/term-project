@@ -197,10 +197,12 @@ int main(int argc, char **argv)
         goto sdl_fail;
     SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
 
-    printf("cam_debug: %s %dx%d, tpf=%u/%u\n"
+    printf("cam_debug: %s %dx%d, tpf=%u/%u | detector limits: min_pixels=%d "
+           "max_sigma_px=%.1f min_sep_px=%.1f\n"
            "  red tint = detector says EAR (green range), yellow tint = C7 (blue range)\n"
            "  click a pixel for its H/S/V; t = toggle tint; q/Esc = quit\n",
-           dev, w, h, (unsigned)cam.tpf_num, (unsigned)cam.tpf_den);
+           dev, w, h, (unsigned)cam.tpf_num, (unsigned)cam.tpf_den, cfg.min_pixels,
+           (double)cfg.max_sigma_px, (double)cfg.min_sep_px);
 
     while (running) {
         SDL_Event e;
@@ -236,11 +238,18 @@ int main(int argc, char **argv)
         }
 
         if (have_obs && SDL_GetTicks() >= next_report) {
-            char title[200];
+            char title[320];
 
+            /* found=0 with a large sigma means the blob was too spread out
+             * (limit cfg.max_sigma_px); at=(x,y) is the centroid. All values
+             * are the detector's own outputs. */
             snprintf(title, sizeof title,
-                     "cam_debug | EAR raw=%ld kept=%d | C7 raw=%ld kept=%d | %s CVA=%.1f",
-                     ear_px, obs.ear.npix, c7_px, obs.c7.npix,
+                     "EAR raw=%ld kept=%d found=%d sig=%.1f at=(%.0f,%.0f) | "
+                     "C7 raw=%ld kept=%d found=%d sig=%.1f at=(%.0f,%.0f) | %s CVA=%.1f",
+                     ear_px, obs.ear.npix, obs.ear.found, (double)obs.ear.sigma,
+                     (double)obs.ear.x, (double)obs.ear.y,
+                     c7_px, obs.c7.npix, obs.c7.found, (double)obs.c7.sigma,
+                     (double)obs.c7.x, (double)obs.c7.y,
                      obs.status == POSTURE_OK ? "OK" : "NO_USER",
                      obs.status == POSTURE_OK ? (double)obs.cva_deg : -1.0);
             SDL_SetWindowTitle(win, title);
