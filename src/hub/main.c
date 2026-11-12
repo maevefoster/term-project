@@ -7,6 +7,7 @@
  * connection from a source replaces the old one, so a restarted sensor
  * process simply reconnects. Posture decisions (fusion) come later.
  */
+#define _GNU_SOURCE /* accept4 */
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>

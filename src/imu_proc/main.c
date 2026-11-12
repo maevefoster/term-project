@@ -1,10 +1,13 @@
 /* imu_proc (basic): reads the MPU-6050 at 100 Hz, shows the current values
- * on the console and appends status/summary records to its own log file.
+ * on the console, sends IMU_DATA to hub at 10 Hz and reports status and
+ * summaries to hub as EVENTs (hub writes the log; each event is also printed
+ * to stderr).
  *
- * Runs under the default scheduler for now; SCHED_FIFO, the complementary
- * filter and the socket to hub come later. After 5 consecutive failed reads
- * (I2C errors or all-zero data) the sensor is reported ABSENT and retried
- * with a backoff; the process never exits for a missing sensor.
+ * Runs under the default scheduler for now; SCHED_FIFO and the
+ * complementary filter come later, so IMU_DATA carries pitch_valid=0. After
+ * 5 consecutive failed reads (I2C errors or all-zero data) the sensor is
+ * reported ABSENT and retried with a backoff; the process never exits for a
+ * missing sensor or a missing hub.
  */
 #include <errno.h>
 #include <getopt.h>
@@ -16,16 +19,16 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "applog.h"
+#include "ipc_client.h"
 #include "mpu6050.h"
 #include "msg.h"
+#include "procstat.h"
 #include "timeutil.h"
 
 #define IMU_DEFAULT_DEV "/dev/i2c-1"
-#define IMU_DEFAULT_LOG "imu.log"
 #define IMU_RATE_HZ     100
 #define IMU_PERIOD_NS   (NS_PER_S / IMU_RATE_HZ)
-#define IMU_CONSOLE_DIV 10 /* ticks per console update: 10 Hz */
+#define IMU_REPORT_DIV  10 /* ticks per console update and IMU_DATA: 10 Hz */
 #define IMU_ERR_LIMIT   5  /* consecutive failed reads before ABSENT */
 #define IMU_HEALTH_S    3600
 
@@ -40,7 +43,7 @@ static const int64_t retry_delay_s[] = { 1, 2, 4, 5 };
 #define IMU_RETRY_STEPS (sizeof retry_delay_s / sizeof retry_delay_s[0])
 
 struct imu_ctx {
-    struct applog log;
+    struct ipc_client ipc;
     struct mpu_dev mpu;
     const char *dev_path;
     enum sensor_status status;
@@ -84,20 +87,6 @@ static int install_signals(void)
     return 0;
 }
 
-static long rss_kb(void)
-{
-    long pages = -1;
-    long page = sysconf(_SC_PAGESIZE);
-    FILE *f = fopen("/proc/self/statm", "re");
-
-    if (!f)
-        return -1;
-    if (fscanf(f, "%*s %ld", &pages) != 1)
-        pages = -1;
-    fclose(f);
-    return (pages < 0 || page <= 0) ? -1 : pages * (page / 1024);
-}
-
 static void schedule_retry(struct imu_ctx *c, int64_t now)
 {
     c->next_retry_ns = now + retry_delay_s[c->retry_step] * NS_PER_S;
@@ -108,16 +97,16 @@ static void schedule_retry(struct imu_ctx *c, int64_t now)
 static void mark_absent(struct imu_ctx *c, int64_t now)
 {
     c->status = SENSOR_ABSENT;
-    c->have_last = 0; /* never show or log a stale reading as current */
+    c->have_last = 0; /* never show or send a stale reading as current */
     if (c->absent_since_ns >= 0)
         return; /* already reported; retries are counted, not logged */
     c->absent_since_ns = now;
     c->absent_events++;
     c->open_failures = 0;
     c->retry_step = 0;
-    applog_write(&c->log, "IMU_ABSENT", "dev=%s i2c_err=%u op=%s errno=%d who_am_i=0x%02x",
-                 c->dev_path, c->err_streak, c->mpu.last_op, c->mpu.last_errno,
-                 (unsigned)c->mpu.who_am_i);
+    ipc_event(&c->ipc, "IMU_ABSENT", "dev=%s i2c_err=%u op=%s errno=%d who_am_i=0x%02x",
+              c->dev_path, c->err_streak, c->mpu.last_op, c->mpu.last_errno,
+              (unsigned)c->mpu.who_am_i);
 }
 
 /* Returns 0 when reading, 1 when absent (retry later), -1 when fatal. */
@@ -133,21 +122,21 @@ static int try_open(struct imu_ctx *c)
         return 1;
     }
     if (r != MPU_OK) {
-        applog_write(&c->log, "IMU_FATAL", "dev=%s op=%s errno=%d",
-                     c->dev_path, c->mpu.last_op, c->mpu.last_errno);
+        ipc_event(&c->ipc, "IMU_FATAL", "dev=%s op=%s errno=%d",
+                  c->dev_path, c->mpu.last_op, c->mpu.last_errno);
         fprintf(stderr, "imu_proc: %s: %s failed: %s\n", c->dev_path,
                 c->mpu.last_op, strerror(c->mpu.last_errno));
         return -1;
     }
 
     if (c->absent_since_ns >= 0)
-        applog_write(&c->log, "IMU_RECONNECTED", "dev=%s down_ms=%lld open_failures=%llu",
-                     c->dev_path, (long long)((now - c->absent_since_ns) / NS_PER_MS),
-                     (unsigned long long)c->open_failures);
-    applog_write(&c->log, "IMU_OPEN",
-                 "dev=%s addr=0x%02x who_am_i=0x%02x accel_fs_g=%d gyro_fs_dps=%d",
-                 c->dev_path, (unsigned)MPU_DEFAULT_ADDR, (unsigned)c->mpu.who_am_i,
-                 MPU_ACCEL_FS_G, MPU_GYRO_FS_DPS);
+        ipc_event(&c->ipc, "IMU_RECONNECTED", "dev=%s down_ms=%lld open_failures=%llu",
+                  c->dev_path, (long long)((now - c->absent_since_ns) / NS_PER_MS),
+                  (unsigned long long)c->open_failures);
+    ipc_event(&c->ipc, "IMU_OPEN",
+              "dev=%s addr=0x%02x who_am_i=0x%02x accel_fs_g=%d gyro_fs_dps=%d",
+              c->dev_path, (unsigned)MPU_DEFAULT_ADDR, (unsigned)c->mpu.who_am_i,
+              MPU_ACCEL_FS_G, MPU_GYRO_FS_DPS);
 
     c->status = SENSOR_OK;
     c->absent_since_ns = -1;
@@ -180,6 +169,16 @@ static void take_sample(struct imu_ctx *c)
     c->samples_total++;
 }
 
+static void send_data(struct imu_ctx *c)
+{
+    struct msg_imu_data m;
+
+    memset(&m, 0, sizeof m);
+    msg_init_hdr(&m.h, MSG_IMU_DATA, c->status);
+    m.pitch_valid = 0; /* no complementary filter yet */
+    ipc_send(&c->ipc, &m.h, sizeof m);
+}
+
 static void show_console(const struct imu_ctx *c, int tty)
 {
     const char *end = tty ? "\033[K\r" : "\n";
@@ -198,24 +197,24 @@ static void log_summary(struct imu_ctx *c, int64_t now)
     long long window_ms = (now - c->window_start_ns) / NS_PER_MS;
 
     if (c->have_last && c->window_samples > 0)
-        applog_write(&c->log, "IMU_SUMMARY",
-                     "status=%s window_ms=%lld samples=%llu i2c_errors=%llu "
-                     "open_failures=%llu age_ms=%lld ax_g=%.3f ay_g=%.3f az_g=%.3f "
-                     "gx_dps=%.2f gy_dps=%.2f gz_dps=%.2f temp_c=%.1f",
-                     sensor_status_name(c->status), window_ms,
-                     (unsigned long long)c->window_samples,
-                     (unsigned long long)c->window_errors,
-                     (unsigned long long)c->open_failures,
-                     (long long)((now - c->last_sample_ns) / NS_PER_MS),
-                     c->last.ax_g, c->last.ay_g, c->last.az_g,
-                     c->last.gx_dps, c->last.gy_dps, c->last.gz_dps, c->last.temp_c);
+        ipc_event(&c->ipc, "IMU_SUMMARY",
+                  "status=%s window_ms=%lld samples=%llu i2c_errors=%llu "
+                  "open_failures=%llu age_ms=%lld ax_g=%.3f ay_g=%.3f az_g=%.3f "
+                  "gx_dps=%.2f gy_dps=%.2f gz_dps=%.2f temp_c=%.1f",
+                  sensor_status_name(c->status), window_ms,
+                  (unsigned long long)c->window_samples,
+                  (unsigned long long)c->window_errors,
+                  (unsigned long long)c->open_failures,
+                  (long long)((now - c->last_sample_ns) / NS_PER_MS),
+                  c->last.ax_g, c->last.ay_g, c->last.az_g,
+                  c->last.gx_dps, c->last.gy_dps, c->last.gz_dps, c->last.temp_c);
     else
-        applog_write(&c->log, "IMU_SUMMARY",
-                     "status=%s window_ms=%lld samples=%llu i2c_errors=%llu open_failures=%llu",
-                     sensor_status_name(c->status), window_ms,
-                     (unsigned long long)c->window_samples,
-                     (unsigned long long)c->window_errors,
-                     (unsigned long long)c->open_failures);
+        ipc_event(&c->ipc, "IMU_SUMMARY",
+                  "status=%s window_ms=%lld samples=%llu i2c_errors=%llu open_failures=%llu",
+                  sensor_status_name(c->status), window_ms,
+                  (unsigned long long)c->window_samples,
+                  (unsigned long long)c->window_errors,
+                  (unsigned long long)c->open_failures);
     c->window_start_ns = now;
     c->window_samples = 0;
     c->window_errors = 0;
@@ -223,12 +222,12 @@ static void log_summary(struct imu_ctx *c, int64_t now)
 
 static void log_health(struct imu_ctx *c, int64_t uptime_ns)
 {
-    applog_write(&c->log, "HEALTH",
-                 "uptime_s=%lld rss_kb=%ld status=%s samples_total=%llu i2c_errors_total=%llu "
-                 "absent_events=%llu log_failures=%lu",
-                 (long long)(uptime_ns / NS_PER_S), rss_kb(), sensor_status_name(c->status),
-                 (unsigned long long)c->samples_total, (unsigned long long)c->errors_total,
-                 (unsigned long long)c->absent_events, c->log.write_failures);
+    ipc_event(&c->ipc, "HEALTH",
+              "uptime_s=%lld rss_kb=%ld status=%s samples_total=%llu i2c_errors_total=%llu "
+              "absent_events=%llu ipc_dropped=%llu",
+              (long long)(uptime_ns / NS_PER_S), proc_rss_kb(), sensor_status_name(c->status),
+              (unsigned long long)c->samples_total, (unsigned long long)c->errors_total,
+              (unsigned long long)c->absent_events, (unsigned long long)c->ipc.dropped);
 }
 
 static int64_t next_deadline(int64_t deadline, int64_t now, int64_t period)
@@ -250,24 +249,24 @@ static void sleep_until(int64_t deadline_ns)
 
 static void usage(const char *argv0)
 {
-    fprintf(stderr, "usage: %s [--dev PATH] [--log PATH]\n"
-                    "  --dev PATH  I2C bus device (default %s)\n"
-                    "  --log PATH  application log (default ./%s)\n",
-            argv0, IMU_DEFAULT_DEV, IMU_DEFAULT_LOG);
+    fprintf(stderr, "usage: %s [--dev PATH] [--run-dir DIR]\n"
+                    "  --dev PATH     I2C bus device (default %s)\n"
+                    "  --run-dir DIR  hub socket directory (default %s)\n",
+            argv0, IMU_DEFAULT_DEV, IPC_DEFAULT_RUN_DIR);
 }
 
 int main(int argc, char **argv)
 {
     static const struct option opts[] = {
         { "dev", required_argument, NULL, 'd' },
-        { "log", required_argument, NULL, 'l' },
+        { "run-dir", required_argument, NULL, 'r' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     struct imu_ctx c;
-    const char *log_path = IMU_DEFAULT_LOG;
+    const char *run_dir = IPC_DEFAULT_RUN_DIR;
     int64_t start, next_tick, next_summary, next_health;
-    unsigned console_tick = 0;
+    unsigned report_tick = 0;
     int exit_code = 0;
     int tty = isatty(STDOUT_FILENO);
     int opt;
@@ -278,13 +277,13 @@ int main(int argc, char **argv)
     c.absent_since_ns = -1;
     mpu_init(&c.mpu);
 
-    while ((opt = getopt_long(argc, argv, "d:l:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:r:h", opts, NULL)) != -1) {
         switch (opt) {
         case 'd':
             c.dev_path = optarg;
             break;
-        case 'l':
-            log_path = optarg;
+        case 'r':
+            run_dir = optarg;
             break;
         case 'h':
             usage(argv[0]);
@@ -299,8 +298,8 @@ int main(int argc, char **argv)
         perror("imu_proc: sigaction");
         return 1;
     }
-    if (applog_open(&c.log, log_path, "imu_proc", APPLOG_CAP) < 0) {
-        fprintf(stderr, "imu_proc: cannot open log %s: %s\n", log_path, strerror(errno));
+    if (ipc_client_init(&c.ipc, run_dir, "imu.sock", "imu_proc") < 0) {
+        fprintf(stderr, "imu_proc: bad --run-dir %s: %s\n", run_dir, strerror(errno));
         return 1;
     }
 
@@ -309,10 +308,9 @@ int main(int argc, char **argv)
     next_tick = start;
     next_summary = start + IMU_SUMMARY_S * NS_PER_S;
     next_health = start + IMU_HEALTH_S * NS_PER_S;
-    applog_write(&c.log, "IMU_START",
-                 "ver=%d pid=%ld dev=%s addr=0x%02x rate_hz=%d summary_s=%d log_cap=%lld",
-                 MSG_VERSION, (long)getpid(), c.dev_path, (unsigned)MPU_DEFAULT_ADDR,
-                 IMU_RATE_HZ, IMU_SUMMARY_S, (long long)c.log.cap);
+    ipc_event(&c.ipc, "IMU_START", "ver=%d pid=%ld dev=%s addr=0x%02x rate_hz=%d summary_s=%d",
+              MSG_VERSION, (long)getpid(), c.dev_path, (unsigned)MPU_DEFAULT_ADDR,
+              IMU_RATE_HZ, IMU_SUMMARY_S);
 
     while (!g_stop) {
         int64_t now;
@@ -328,8 +326,9 @@ int main(int argc, char **argv)
             break;
         }
 
-        if (++console_tick >= IMU_CONSOLE_DIV) {
-            console_tick = 0;
+        if (++report_tick >= IMU_REPORT_DIV) {
+            report_tick = 0;
+            send_data(&c);
             show_console(&c, tty);
         }
 
@@ -350,12 +349,12 @@ int main(int argc, char **argv)
     if (tty)
         putchar('\n');
     mpu_close(&c.mpu);
-    applog_write(&c.log, "IMU_STOP",
-                 "reason=%s samples_total=%llu i2c_errors_total=%llu absent_events=%llu "
-                 "log_failures=%lu",
-                 exit_code ? "fatal" : "signal", (unsigned long long)c.samples_total,
-                 (unsigned long long)c.errors_total, (unsigned long long)c.absent_events,
-                 c.log.write_failures);
-    applog_close(&c.log);
+    ipc_event(&c.ipc, "IMU_STOP",
+              "reason=%s samples_total=%llu i2c_errors_total=%llu absent_events=%llu "
+              "ipc_sent=%llu ipc_dropped=%llu",
+              exit_code ? "fatal" : "signal", (unsigned long long)c.samples_total,
+              (unsigned long long)c.errors_total, (unsigned long long)c.absent_events,
+              (unsigned long long)c.ipc.sent, (unsigned long long)c.ipc.dropped);
+    ipc_client_close(&c.ipc);
     return exit_code;
 }

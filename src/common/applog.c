@@ -228,6 +228,8 @@ static int format_line(const char *proc, char *buf, size_t cap,
             if (m < 0 || (size_t)m >= room - len)
                 return -1;
         }
+        if (m == 0)
+            len--; /* empty body: drop the separator */
         len += (size_t)m;
     }
 

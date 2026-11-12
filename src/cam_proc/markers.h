@@ -29,4 +29,14 @@ void markers_on_frame(const uint8_t *yuyv, size_t len,
 /* Copies the current window's counters into *out and resets them. */
 void markers_take_stats(struct marker_stats *out);
 
+/* Result for the most recent frame passed to markers_on_frame. */
+struct marker_obs {
+    int ran;        /* markers_on_frame has been called at least once */
+    int found;      /* that frame gave a valid CVA */
+    float cva_deg;  /* valid only if found */
+    float conf;     /* valid only if found */
+};
+
+void markers_last_obs(struct marker_obs *out);
+
 #endif

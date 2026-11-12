@@ -5,6 +5,7 @@
 static posture_cfg_t g_cfg;
 static int g_cfg_ready;
 static struct marker_stats g_stats;
+static struct marker_obs g_last;
 
 void markers_on_frame(const uint8_t *yuyv, size_t len,
                       uint32_t width, uint32_t height, uint32_t bytesperline)
@@ -16,6 +17,8 @@ void markers_on_frame(const uint8_t *yuyv, size_t len,
         g_cfg_ready = 1;
     }
     g_stats.frames++;
+    g_last.ran = 1;
+    g_last.found = 0; /* set below only if this frame gives a valid CVA */
 
     /* posture_detect expects tightly packed rows (stride == width * 2). */
     if (!yuyv || width == 0 || height == 0 ||
@@ -36,6 +39,14 @@ void markers_on_frame(const uint8_t *yuyv, size_t len,
     g_stats.have_last = 1;
     g_stats.last_cva_deg = obs.cva_deg;
     g_stats.last_conf = obs.confidence;
+    g_last.found = 1;
+    g_last.cva_deg = obs.cva_deg;
+    g_last.conf = obs.confidence;
+}
+
+void markers_last_obs(struct marker_obs *out)
+{
+    *out = g_last;
 }
 
 void markers_take_stats(struct marker_stats *out)
