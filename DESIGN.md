@@ -120,8 +120,8 @@ This section was written while our MPU-6050 boards were defective, so it covers 
 
 | # | Deviation | M2 design | Reverts when |
 |---|---|---|---|
-| 1 | `cam_proc` writes the application log itself (`src/common/applog.c`) | Only `hub` persists application logs | hub exists; applog moves into hub |
-| 2 | No supervisor, hub or IPC. `cam_proc` is started by hand | supervisor + Unix domain sockets | mechanism E work starts |
+| 1 | ~~`cam_proc` writes the application log itself~~ **Reverted in Step 1:** hub writes the log | Only `hub` persists application logs | done |
+| 2 | No supervisor. `cam_proc` is started by hand (hub and IPC exist since Step 1) | supervisor + Unix domain sockets | Step 2 |
 | 3 | Log is `./posture.log` in the working directory (`--log PATH` overrides) | `/var/lib/posture/` | systemd deployment |
 | 4 | Marker detection (`posture_detect.c`, student-written) runs on every good frame but does not accept markers live yet (EVALUATION.md, 2026-11-05) | HSV markers, centroids, CVA | markers are accepted live |
 
@@ -159,7 +159,7 @@ A basic `imu_proc` reads the MPU-6050 and reports raw values. It has no filter, 
 
 | # | Deviation | M2 design | Reverts when |
 |---|---|---|---|
-| 1 | `imu_proc` writes its own log, `./imu.log` (`--log PATH` overrides) | Only `hub` persists application logs | hub exists |
+| 1 | ~~`imu_proc` writes its own log, `./imu.log`~~ **Reverted in Step 1:** events go to hub | Only `hub` persists application logs | done |
 | 2 | Default scheduler | `SCHED_FIFO`, priority 80 | mechanism C work starts |
 | 3 | No pitch; converted accel, gyro and temperature only | Complementary filter gives pitch | Maeve implements the filter |
 | 4 | No IPC, no supervisor. Started by hand | UDS to hub at 10 Hz, 1 Hz heartbeat | mechanism E integration |
@@ -176,7 +176,7 @@ A basic `imu_proc` reads the MPU-6050 and reports raw values. It has no filter, 
 5 consecutive read errors close the bus and log `IMU_ABSENT` once. Setup is retried after 1, 2, 4, then every 5 s. The 5 s cap keeps replug recovery inside the 10 s target. Permission errors on the device are `IMU_FATAL`: the process exits 1. An all-zero burst counts as a failed read, because a chip that resets after setup keeps answering on the bus but returns only zeros. This extends the M2 trigger, which lists I2C errors only; such a record shows `i2c_err=5 op=all_zero_burst errno=0`, and those reads are included in the `i2c_errors` counts. Data frozen at non-zero values is not detected.
 
 ### Log events
-Same record format as the M3 log format above. The failure table's `-> DEGRADED(cam-only)` suffix is left out because there is no hub to enter that state.
+Sent to hub as EVENTs and written by hub in the M3 log format above (see Step 1). The failure table's `-> DEGRADED(cam-only)` appears as a separate `HUB_MODE` record from hub.
 
 - `IMU_START`, `IMU_OPEN`, `IMU_ABSENT`, `IMU_RECONNECTED`, `IMU_FATAL`, `IMU_STOP`, `HEALTH` (hourly: uptime, RSS, totals), `LOG_TORN_REPAIRED`, `LOG_ROTATED`.
 - `IMU_SUMMARY` every 10 s: status, window, sample and error counts, plus the latest reading and its age. The reading is omitted when none is current. Individual samples are not logged (about 8.6 million lines a day at 100 Hz).
@@ -188,3 +188,44 @@ Same record format as the M3 log format above. The failure table's `-> DEGRADED(
 | Retry backoff | 1, 2, 4, 5 s | `retry_delay_s` in `src/imu_proc/main.c` |
 | DLPF and sample-rate divider | left unset | `src/imu_proc/mpu6050.c` |
 | Log size cap | 5 MiB plus one rotated copy, shared with the camera log | `APPLOG_CAP` in `src/common/applog.h` |
+
+## Step 1: IPC and a minimal hub
+
+`hub` receives data and events from both sensor processes, decides once per second which sensors are usable, and is the only writer of the application log. It makes no posture decisions yet (that is the fusion state machine, Step 4). Processes are still started by hand; the supervisor is Step 2.
+
+### Sockets
+- One `SOCK_SEQPACKET` Unix socket per source: `<run_dir>/imu.sock` and `<run_dir>/cam.sock`. `run_dir` defaults to `/run/posture` (`--run-dir` overrides, on all three programs). The socket a message arrives on identifies the sender.
+- For runs started by hand: `sudo mkdir -p /run/posture && sudo chown $USER /run/posture` once per boot (`/run` is cleared at reboot). Under systemd (Step 2) the unit creates it.
+- hub listens; at startup it removes a leftover socket file from an earlier run, never any other kind of file. A new connection from a source replaces the old one, so a restarted sensor process just reconnects.
+- Senders (`src/common/ipc_client.c`) connect lazily, retry at most once per second, and send with `MSG_DONTWAIT | MSG_NOSIGNAL`. A message that can't be sent (hub busy, down or restarting) is dropped and counted (`ipc_dropped` in `HEALTH`/`*_STOP`); its `seq` is still used, so hub counts the gap. Every event is also printed to the sender's stderr (the journal under systemd), so events are not lost while hub is down.
+
+### Messages (`src/common/msg.h`, `MSG_VERSION` 2)
+Fixed-size structs with explicit padding, sizes checked at compile time. Same machine and compiler on both ends, so they are sent as-is.
+
+| Type | Sender | Rate | Contents |
+|---|---|---|---|
+| header (all) | | | version, type, `seq` (+1 per message sent or dropped), sender's `CLOCK_MONOTONIC` ns, status (`OK`/`ABSENT`/`NO_MARKERS`) |
+| `IMU_DATA` | imu_proc | 10 Hz | `pitch_deg`, `pitch_valid` (always 0 until the complementary filter exists); status `OK` or `ABSENT` |
+| `CAM_DATA` | cam_proc | 5 Hz, independent of the camera frame rate | `cva_deg`, `confidence`, `cva_valid`, time of the frame behind them |
+| `EVENT` | both | as they happen | name `[A-Z0-9_]+` (< 32 bytes), key=value body (< 200 bytes) |
+
+- `CAM_DATA` status: `ABSENT` while the device is gone; `NO_MARKERS` when the latest frame (at most 1 s old) had no valid markers; otherwise `OK`. The CVA is marked valid only if its frame is at most 1 s old, so stale CVA is never sent as current. The "no markers for 10 s while the IMU shows the user seated" rule is fusion logic in hub (Step 4).
+- hub checks every message: length for its type, version, type allowed on that socket, status in range, valid flags 0/1, finite values, confidence in 0..1, NUL-terminated event text. Rejects are counted per source; the first per connection is logged as `HUB_REJECT`.
+- The no-marker status is named `NO_MARKERS` (resolves M2 known issue 2, which also used `NO_USER`).
+
+### Freshness and mode
+- A source is usable if it is connected, its last data message is at most 2 s old, and it reports usable data: IMU status `OK` (pitch validity is not required until the filter exists); camera status `OK` with a valid CVA.
+- 2 s: M2 design value for the IMU; team decision to use the same for the camera.
+- Mode, evaluated each second: `OK` (both), `DEGRADED(cam-only)`, `DEGRADED(imu-only)`, `NO_SENSORS` (neither; no coaching or alerts — team decision, not in M2). A sensor process that is alive and reports `ABSENT` is not treated as crashed.
+
+### Log
+hub writes `posture.log` (`--log` overrides) with `applog.c`. Sensor events keep their names and bodies and are written under the sender's name, e.g. `imu_proc IMU_ABSENT ...`. hub's own records:
+
+- `HUB_START`, `HUB_STOP`, `HUB_FATAL`, `HUB_ERROR`.
+- `HUB_CLIENT source=imu|cam state=connected|disconnected reason=eof|replaced|recv_error`.
+- `HUB_MODE from=… to=… imu=<why> cam=<why>`, only on change. `<why>` is `ok`, `disconnected`, `no_data`, `stale`, a status (`ABSENT`, `NO_MARKERS`) or `no_cva`. This is the failure table's `-> DEGRADED(...)`.
+- `HUB_SUMMARY` every minute: mode, and per source its state, messages, rejects and seq gaps. Posture time summaries come with fusion.
+- `HEALTH` hourly: uptime, RSS, mode, mode changes, log write failures.
+- `HUB_REJECT` as above.
+
+Hub's event timestamps are when hub wrote them; the sender's own time is in the message header but is not logged.

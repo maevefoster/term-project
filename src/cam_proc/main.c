@@ -1,9 +1,11 @@
-/* cam_proc (M3): standalone V4L2 capture with bounded logging.
+/* cam_proc: V4L2 capture with marker detection, reporting to hub.
  *
- * Captures 320x240 YUYV at 5 fps into mmap buffers, keeps frames in RAM
- * only, and appends status/summary records to a single log file. An
- * unplugged camera is reported as ABSENT and retried every 5 s; the
- * process never exits for a missing device.
+ * Asks for 320x240 YUYV at 5 fps and runs at whatever rate the driver
+ * grants, keeping frames in RAM only. Sends the latest observation to hub as
+ * CAM_DATA at 5 Hz, and status and summaries as EVENTs (hub writes the log;
+ * each event is also printed to stderr). An unplugged camera is reported as
+ * ABSENT and retried every 5 s; the process never exits for a missing device
+ * or a missing hub.
  */
 #include <errno.h>
 #include <getopt.h>
@@ -17,15 +19,15 @@
 
 #include <linux/videodev2.h>
 
-#include "applog.h"
 #include "frame_stats.h"
+#include "ipc_client.h"
 #include "markers.h"
 #include "msg.h"
+#include "procstat.h"
 #include "timeutil.h"
 #include "v4l2_cap.h"
 
 #define CAM_DEFAULT_DEV  "/dev/video0"
-#define CAM_DEFAULT_LOG  "posture.log"
 #define CAM_WIDTH        320
 #define CAM_HEIGHT       240
 #define CAM_FPS          5
@@ -34,6 +36,8 @@
 #define CAM_RETRY_NS     (5 * NS_PER_S) /* ABSENT retry period (CLAUDE.md section 3) */
 #define CAM_IDLE_MS      250            /* sleep slice while waiting to retry */
 #define CAM_HEALTH_S     3600
+#define CAM_DATA_NS      (200 * NS_PER_MS) /* CAM_DATA to hub at 5 Hz (design) */
+#define CAM_OBS_MAX_AGE_NS NS_PER_S        /* older observations are not sent as valid */
 
 /* Placeholder until the team decides (CLAUDE.md section 8). */
 #ifndef CAM_SUMMARY_S
@@ -41,7 +45,7 @@
 #endif
 
 struct cam_ctx {
-    struct applog log;
+    struct ipc_client ipc;
     struct cam_dev cam;
     struct frame_stats stats;
     const char *dev_path;
@@ -51,6 +55,7 @@ struct cam_ctx {
     uint64_t open_failures;  /* since the device went absent */
     uint64_t frames_total;
     uint64_t absent_events;
+    int64_t obs_frame_ns;    /* time of the last frame given to markers; -1 if none */
 };
 
 static volatile sig_atomic_t g_stop;
@@ -88,20 +93,6 @@ static double ns_to_ms(int64_t ns)
     return ns < 0 ? -1.0 : (double)ns / (double)NS_PER_MS;
 }
 
-static long rss_kb(void)
-{
-    long pages = -1;
-    long page = sysconf(_SC_PAGESIZE);
-    FILE *f = fopen("/proc/self/statm", "re");
-
-    if (!f)
-        return -1;
-    if (fscanf(f, "%*s %ld", &pages) != 1)
-        pages = -1;
-    fclose(f);
-    return (pages < 0 || page <= 0) ? -1 : pages * (page / 1024);
-}
-
 static void on_frame(const struct cam_frame *f, void *arg)
 {
     struct cam_ctx *c = arg;
@@ -110,9 +101,11 @@ static void on_frame(const struct cam_frame *f, void *arg)
     fstats_frame(&c->stats, f->sequence, ts_ns(&f->mono), bad);
     c->frames_total++;
     c->stall_streak = 0;
-    if (!bad)
+    if (!bad) {
         markers_on_frame(f->data, f->bytesused, c->cam.width, c->cam.height,
                          c->cam.bytesperline);
+        c->obs_frame_ns = ts_ns(&f->mono);
+    }
 }
 
 static void mark_absent(struct cam_ctx *c, int64_t now)
@@ -123,8 +116,8 @@ static void mark_absent(struct cam_ctx *c, int64_t now)
     c->absent_since_ns = now;
     c->absent_events++;
     c->open_failures = 0;
-    applog_write(&c->log, "CAM_ABSENT", "dev=%s op=%s errno=%d",
-                 c->dev_path, c->cam.last_op, c->cam.last_errno);
+    ipc_event(&c->ipc, "CAM_ABSENT", "dev=%s op=%s errno=%d",
+              c->dev_path, c->cam.last_op, c->cam.last_errno);
 }
 
 /* Returns 0 when streaming, 1 when absent (retry later), -1 when fatal. */
@@ -140,31 +133,57 @@ static int try_open(struct cam_ctx *c)
         return 1;
     }
     if (r != CAM_OK) {
-        applog_write(&c->log, "CAM_FATAL", "dev=%s op=%s errno=%d",
-                     c->dev_path, c->cam.last_op, c->cam.last_errno);
+        ipc_event(&c->ipc, "CAM_FATAL", "dev=%s op=%s errno=%d",
+                  c->dev_path, c->cam.last_op, c->cam.last_errno);
         return -1;
     }
 
     if (c->absent_since_ns >= 0)
-        applog_write(&c->log, "CAM_RECONNECTED", "dev=%s down_ms=%lld open_failures=%llu",
-                     c->dev_path, (long long)((now - c->absent_since_ns) / NS_PER_MS),
-                     (unsigned long long)c->open_failures);
+        ipc_event(&c->ipc, "CAM_RECONNECTED", "dev=%s down_ms=%lld open_failures=%llu",
+                  c->dev_path, (long long)((now - c->absent_since_ns) / NS_PER_MS),
+                  (unsigned long long)c->open_failures);
     fourcc_str(c->cam.pixfmt, fcc);
-    applog_write(&c->log, "CAM_OPEN",
-                 "dev=%s fmt=%s w=%u h=%u bpl=%u sizeimage=%u tpf=%u/%u nbufs=%u",
-                 c->dev_path, fcc, (unsigned)c->cam.width, (unsigned)c->cam.height,
-                 (unsigned)c->cam.bytesperline, (unsigned)c->cam.sizeimage,
-                 (unsigned)c->cam.tpf_num, (unsigned)c->cam.tpf_den, c->cam.n_bufs);
+    ipc_event(&c->ipc, "CAM_OPEN",
+              "dev=%s fmt=%s w=%u h=%u bpl=%u sizeimage=%u tpf=%u/%u nbufs=%u",
+              c->dev_path, fcc, (unsigned)c->cam.width, (unsigned)c->cam.height,
+              (unsigned)c->cam.bytesperline, (unsigned)c->cam.sizeimage,
+              (unsigned)c->cam.tpf_num, (unsigned)c->cam.tpf_den, c->cam.n_bufs);
     if (c->cam.width != CAM_WIDTH || c->cam.height != CAM_HEIGHT)
-        applog_write(&c->log, "CAM_FORMAT_MISMATCH", "want=%ux%u got=%ux%u",
-                     (unsigned)CAM_WIDTH, (unsigned)CAM_HEIGHT,
-                     (unsigned)c->cam.width, (unsigned)c->cam.height);
+        ipc_event(&c->ipc, "CAM_FORMAT_MISMATCH", "want=%ux%u got=%ux%u",
+                  (unsigned)CAM_WIDTH, (unsigned)CAM_HEIGHT,
+                  (unsigned)c->cam.width, (unsigned)c->cam.height);
 
     c->status = SENSOR_OK;
     c->absent_since_ns = -1;
     c->stall_streak = 0;
+    c->obs_frame_ns = -1; /* nothing from the new stream yet */
     fstats_new_stream(&c->stats);
     return 0;
+}
+
+/* Sends the latest observation. Status is ABSENT while the device is gone,
+ * NO_MARKERS when the latest recent frame had no valid markers, otherwise
+ * OK. The CVA is only marked valid if its frame is at most 1 s old. */
+static void send_data(struct cam_ctx *c, int64_t now)
+{
+    struct msg_cam_data m;
+    struct marker_obs o;
+    enum sensor_status st = c->status;
+    int recent = c->obs_frame_ns >= 0 && now - c->obs_frame_ns <= CAM_OBS_MAX_AGE_NS;
+
+    markers_last_obs(&o);
+    if (st == SENSOR_OK && recent && o.ran && !o.found)
+        st = SENSOR_NO_MARKERS;
+
+    memset(&m, 0, sizeof m);
+    msg_init_hdr(&m.h, MSG_CAM_DATA, st);
+    if (st == SENSOR_OK && recent && o.found) {
+        m.cva_valid = 1;
+        m.cva_deg = o.cva_deg;
+        m.confidence = o.conf;
+        m.obs_mono_ns = c->obs_frame_ns;
+    }
+    ipc_send(&c->ipc, &m.h, sizeof m);
 }
 
 static void log_summary(struct cam_ctx *c, int64_t now)
@@ -176,30 +195,30 @@ static void log_summary(struct cam_ctx *c, int64_t now)
     markers_take_stats(&m);
     /* cva_deg/cva_conf are the last valid observation (-1 if none yet);
      * derived numbers only, never pixel data. */
-    applog_write(&c->log, "CAM_SUMMARY",
-                 "status=%s window_ms=%lld frames=%llu fps=%.2f iv_min_ms=%.1f "
-                 "iv_p50_ms=%.1f iv_max_ms=%.1f dropped=%llu stalls=%llu bad=%llu "
-                 "open_failures=%llu mk_frames=%llu mk_found=%llu mk_none=%llu "
-                 "mk_skip=%llu cva_deg=%.1f cva_conf=%.2f",
-                 sensor_status_name(c->status), (long long)(s.window_ns / NS_PER_MS),
-                 (unsigned long long)s.frames, s.fps, ns_to_ms(s.iv_min_ns),
-                 ns_to_ms(s.iv_p50_ns), ns_to_ms(s.iv_max_ns),
-                 (unsigned long long)s.dropped, (unsigned long long)s.stalls,
-                 (unsigned long long)s.bad_frames, (unsigned long long)c->open_failures,
-                 (unsigned long long)m.frames, (unsigned long long)m.found,
-                 (unsigned long long)m.no_user, (unsigned long long)m.skipped,
-                 m.have_last ? (double)m.last_cva_deg : -1.0,
-                 m.have_last ? (double)m.last_conf : -1.0);
+    ipc_event(&c->ipc, "CAM_SUMMARY",
+              "status=%s window_ms=%lld frames=%llu fps=%.2f iv_min_ms=%.1f "
+              "iv_p50_ms=%.1f iv_max_ms=%.1f dropped=%llu stalls=%llu bad=%llu "
+              "open_failures=%llu mk_frames=%llu mk_found=%llu mk_none=%llu "
+              "mk_skip=%llu cva_deg=%.1f cva_conf=%.2f",
+              sensor_status_name(c->status), (long long)(s.window_ns / NS_PER_MS),
+              (unsigned long long)s.frames, s.fps, ns_to_ms(s.iv_min_ns),
+              ns_to_ms(s.iv_p50_ns), ns_to_ms(s.iv_max_ns),
+              (unsigned long long)s.dropped, (unsigned long long)s.stalls,
+              (unsigned long long)s.bad_frames, (unsigned long long)c->open_failures,
+              (unsigned long long)m.frames, (unsigned long long)m.found,
+              (unsigned long long)m.no_user, (unsigned long long)m.skipped,
+              m.have_last ? (double)m.last_cva_deg : -1.0,
+              m.have_last ? (double)m.last_conf : -1.0);
 }
 
 static void log_health(struct cam_ctx *c, int64_t uptime_ns)
 {
-    applog_write(&c->log, "HEALTH",
-                 "uptime_s=%lld rss_kb=%ld status=%s frames_total=%llu "
-                 "absent_events=%llu log_failures=%lu",
-                 (long long)(uptime_ns / NS_PER_S), rss_kb(), sensor_status_name(c->status),
-                 (unsigned long long)c->frames_total, (unsigned long long)c->absent_events,
-                 c->log.write_failures);
+    ipc_event(&c->ipc, "HEALTH",
+              "uptime_s=%lld rss_kb=%ld status=%s frames_total=%llu "
+              "absent_events=%llu ipc_dropped=%llu",
+              (long long)(uptime_ns / NS_PER_S), proc_rss_kb(), sensor_status_name(c->status),
+              (unsigned long long)c->frames_total, (unsigned long long)c->absent_events,
+              (unsigned long long)c->ipc.dropped);
 }
 
 static int64_t next_deadline(int64_t deadline, int64_t now, int64_t period)
@@ -217,23 +236,23 @@ static void sleep_ms(long ms)
 
 static void usage(const char *argv0)
 {
-    fprintf(stderr, "usage: %s [--dev PATH] [--log PATH]\n"
-                    "  --dev PATH  V4L2 capture device (default %s)\n"
-                    "  --log PATH  application log (default ./%s)\n",
-            argv0, CAM_DEFAULT_DEV, CAM_DEFAULT_LOG);
+    fprintf(stderr, "usage: %s [--dev PATH] [--run-dir DIR]\n"
+                    "  --dev PATH     V4L2 capture device (default %s)\n"
+                    "  --run-dir DIR  hub socket directory (default %s)\n",
+            argv0, CAM_DEFAULT_DEV, IPC_DEFAULT_RUN_DIR);
 }
 
 int main(int argc, char **argv)
 {
     static const struct option opts[] = {
         { "dev", required_argument, NULL, 'd' },
-        { "log", required_argument, NULL, 'l' },
+        { "run-dir", required_argument, NULL, 'r' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 },
     };
     struct cam_ctx c;
-    const char *log_path = CAM_DEFAULT_LOG;
-    int64_t start, next_summary, next_health, next_retry = 0;
+    const char *run_dir = IPC_DEFAULT_RUN_DIR;
+    int64_t start, next_summary, next_health, next_data, next_retry = 0;
     int exit_code = 0;
     int opt;
 
@@ -241,15 +260,16 @@ int main(int argc, char **argv)
     c.dev_path = CAM_DEFAULT_DEV;
     c.status = SENSOR_ABSENT;
     c.absent_since_ns = -1;
+    c.obs_frame_ns = -1;
     cam_init(&c.cam);
 
-    while ((opt = getopt_long(argc, argv, "d:l:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:r:h", opts, NULL)) != -1) {
         switch (opt) {
         case 'd':
             c.dev_path = optarg;
             break;
-        case 'l':
-            log_path = optarg;
+        case 'r':
+            run_dir = optarg;
             break;
         case 'h':
             usage(argv[0]);
@@ -264,8 +284,8 @@ int main(int argc, char **argv)
         perror("cam_proc: sigaction");
         return 1;
     }
-    if (applog_open(&c.log, log_path, "cam_proc", APPLOG_CAP) < 0) {
-        fprintf(stderr, "cam_proc: cannot open log %s: %s\n", log_path, strerror(errno));
+    if (ipc_client_init(&c.ipc, run_dir, "cam.sock", "cam_proc") < 0) {
+        fprintf(stderr, "cam_proc: bad --run-dir %s: %s\n", run_dir, strerror(errno));
         return 1;
     }
 
@@ -273,11 +293,10 @@ int main(int argc, char **argv)
     fstats_new_window(&c.stats, start);
     next_summary = start + CAM_SUMMARY_S * NS_PER_S;
     next_health = start + CAM_HEALTH_S * NS_PER_S;
-    applog_write(&c.log, "CAM_START",
-                 "ver=%d pid=%ld dev=%s want=%ux%u@%u summary_s=%d log_cap=%lld",
-                 MSG_VERSION, (long)getpid(), c.dev_path, (unsigned)CAM_WIDTH,
-                 (unsigned)CAM_HEIGHT, (unsigned)CAM_FPS, CAM_SUMMARY_S,
-                 (long long)c.log.cap);
+    next_data = start;
+    ipc_event(&c.ipc, "CAM_START", "ver=%d pid=%ld dev=%s want=%ux%u@%u summary_s=%d",
+              MSG_VERSION, (long)getpid(), c.dev_path, (unsigned)CAM_WIDTH,
+              (unsigned)CAM_HEIGHT, (unsigned)CAM_FPS, CAM_SUMMARY_S);
 
     while (!g_stop) {
         int64_t now = mono_ns();
@@ -303,8 +322,8 @@ int main(int argc, char **argv)
             case CAM_TIMEOUT:
                 fstats_stall(&c.stats);
                 if (++c.stall_streak == 1)
-                    applog_write(&c.log, "CAM_STALL", "dev=%s timeout_ms=%d",
-                                 c.dev_path, CAM_POLL_MS);
+                    ipc_event(&c.ipc, "CAM_STALL", "dev=%s timeout_ms=%d",
+                              c.dev_path, CAM_POLL_MS);
                 if (c.stall_streak >= CAM_STALL_LIMIT) {
                     /* Open but silent: report ABSENT and reopen right away. */
                     cam_close(&c.cam);
@@ -323,6 +342,10 @@ int main(int argc, char **argv)
         }
 
         now = mono_ns();
+        if (now >= next_data) {
+            send_data(&c, now);
+            next_data = next_deadline(next_data, now, CAM_DATA_NS);
+        }
         if (now >= next_summary) {
             log_summary(&c, now);
             fstats_new_window(&c.stats, now);
@@ -335,9 +358,11 @@ int main(int argc, char **argv)
     }
 
     cam_close(&c.cam);
-    applog_write(&c.log, "CAM_STOP", "reason=%s frames_total=%llu absent_events=%llu log_failures=%lu",
-                 exit_code ? "fatal" : "signal", (unsigned long long)c.frames_total,
-                 (unsigned long long)c.absent_events, c.log.write_failures);
-    applog_close(&c.log);
+    ipc_event(&c.ipc, "CAM_STOP",
+              "reason=%s frames_total=%llu absent_events=%llu ipc_sent=%llu ipc_dropped=%llu",
+              exit_code ? "fatal" : "signal", (unsigned long long)c.frames_total,
+              (unsigned long long)c.absent_events, (unsigned long long)c.ipc.sent,
+              (unsigned long long)c.ipc.dropped);
+    ipc_client_close(&c.ipc);
     return exit_code;
 }
