@@ -8,7 +8,7 @@
  * place; this tool adds no color or detection logic of its own.
  *
  *   red tint     pixels the detector marks as EAR   (green sticker range)
- *   yellow tint  pixels the detector marks as C7    (blue sticker range)
+ *   yellow tint  pixels the detector marks as C7    (purple sticker range)
  *   white box    a marker blob that survived the detector's size/spread checks
  *   white line   ear-to-C7 line, drawn when the detector reports a valid CVA
  *
@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 
     printf("cam_debug: %s %dx%d, tpf=%u/%u | detector limits: min_pixels=%d "
            "max_sigma_px=%.1f min_sep_px=%.1f\n"
-           "  red tint = detector says EAR (green range), yellow tint = C7 (blue range)\n"
+           "  red tint = detector says EAR (green range), yellow tint = C7 (purple range)\n"
            "  click a pixel for its H/S/V; t = toggle tint; q/Esc = quit\n",
            dev, w, h, (unsigned)cam.tpf_num, (unsigned)cam.tpf_den, cfg.min_pixels,
            (double)cfg.max_sigma_px, (double)cfg.min_sep_px);

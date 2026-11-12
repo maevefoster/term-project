@@ -113,6 +113,7 @@ These are listed so the final `DESIGN.md` can record what M2 got wrong (the hand
 3. Dwell time N, hysteresis length, posture angle thresholds and the HSV color ranges have no numeric values yet.
 4. The Storage section does not give rates, file format, retention or log size cap. The M3 section below defines the log format; retention and size cap are still open.
 5. "Within 5 seconds of posture check" does not say which timestamps start and stop the measurement.
+6. Marker colors (decided 2026-11-12): the neck (C7) marker is PURPLE instead of blue. Pink was measured first and its dark pixels read as hue about 357-3, which overlaps skin and red. The C7 hue range is PROVISIONAL (260-300 deg, S >= 0.50, V >= 0.20) and is not yet measured on our purple sticky note; replace it with measured values from `make camdebug` clicks. The ear marker is still green (90-165 deg, S >= 0.50, V >= 0.25).
 
 ## M3 interim decisions (camera only)
 
