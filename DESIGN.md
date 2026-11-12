@@ -1,7 +1,5 @@
 # posture-coach design
 
-# posture-coach design
-
 > Maeve Foster & Tiffany Chen, CS 370. The M2 section below is the submitted **TP-D2 M2 Design Document (10/28/2026)**, imported from `CS-370-001_M2_Design_Document.pdf`. Spelling was corrected; the content is unchanged. Known problems in the submitted text are listed at the end of the M2 section. The M3 section follows it.
 
 ## M2 design (TP-D2, 10/28/2026)
@@ -118,18 +116,19 @@ These are listed so the final `DESIGN.md` can record what M2 got wrong (the hand
 
 ## M3 interim decisions (camera only)
 
-The MPU-6050 boards we have are defective, so M3 builds and tests only `cam_proc`. These are deliberate, temporary deviations from the M2 design:
+This section was written while our MPU-6050 boards were defective, so it covers `cam_proc` only; `imu_proc` has its own section below. These are deliberate, temporary deviations from the M2 design:
 
 | # | Deviation | M2 design | Reverts when |
 |---|---|---|---|
 | 1 | `cam_proc` writes the application log itself (`src/common/applog.c`) | Only `hub` persists application logs | hub exists; applog moves into hub |
 | 2 | No supervisor, hub or IPC. `cam_proc` is started by hand | supervisor + Unix domain sockets | mechanism E work starts |
 | 3 | Log is `./posture.log` in the working directory (`--log PATH` overrides) | `/var/lib/posture/` | systemd deployment |
-| 4 | No marker detection. `markers_on_frame()` is an empty, student-owned seam | HSV markers, centroids, CVA | Tiffany implements it |
+| 4 | Marker detection (`posture_detect.c`, student-written) runs on every good frame but does not accept markers live yet (EVALUATION.md, 2026-11-05) | HSV markers, centroids, CVA | markers are accepted live |
 
 ### Camera capture
 - `/dev/video0`, V4L2, YUYV 320×240, 5 fps requested, 4 mmap buffers. The format and frame interval the driver actually grants are logged in `CAM_OPEN` (plus `CAM_FORMAT_MISMATCH` if the size differs).
-- Frames stay in the mmap buffers and are requeued right after the callback. Nothing derived from pixels is logged.
+- **Frame rate (team decision, 2026-11-12):** `cam_proc` still asks for 5 fps but runs at whatever rate the driver grants, so different webcams work without changes. One webcam on our Pi granted 1/30 s per frame. This replaces the M2 "5 Hz". The granted interval is logged in `CAM_OPEN` (`tpf=`) and the measured rate in `CAM_SUMMARY` (`fps=`).
+- Frames stay in the mmap buffers and are requeued right after the callback. No pixel data is logged or saved; only derived numbers are (marker counts, CVA and confidence in `CAM_SUMMARY`).
 - Each dequeue waits at most 1 s (`poll`). A timeout is a stall. 5 consecutive stalls close the device, report `CAM_ABSENT op=stall`, and reopen it immediately.
 - Unplug (`ENODEV`/`EIO`/`ENOENT`/`ENXIO`/`EBUSY`, or `POLLERR`) closes the device, logs `CAM_ABSENT` once, and retries every 5 s. Failed retries are counted in `CAM_SUMMARY`, not logged one by one. Reconnecting logs `CAM_RECONNECTED down_ms=…`.
 - A wrong device or unsupported format is `CAM_FATAL`: the process exits 1.
@@ -144,45 +143,7 @@ One record per line:
 - The CRC-32 (IEEE, lowercase hex) covers every byte before ` *`. Records are at most 512 bytes; an oversized body is replaced by `truncated=1`. CR/LF in values become `_`.
 - Each record goes out in one `write()` on an `O_APPEND` fd. A failed write is truncated back out of the file.
 - On open, an unterminated tail is dropped, then the final complete line is dropped if its CRC fails. A `LOG_TORN_REPAIRED bytes=N` record follows.
-- Events: `CAM_START`, `CAM_OPEN`, `CAM_FORMAT_MISMATCH`, `CAM_SUMMARY`, `CAM_STALL`, `CAM_ABSENT`, `CAM_RECONNECTED`, `CAM_FATAL`, `CAM_STOP`, `HEALTH` (hourly: uptime, RSS, totals), `LOG_TORN_REPAIRED`, `LOG_ROTATED`.
-
-### Open decisions (placeholders, team to confirm)
-| Item | Placeholder | Where |
-|---|---|---|
-| Log size cap | 5 MiB, plus one rotated copy `posture.log.1` (about 10 MiB worst case) | `APPLOG_CAP` in `src/common/applog.h` |
-| Summary interval | 10 s (per-frame lines would be about 430k/day) | `CAM_SUMMARY_S` in `src/cam_proc/main.c` |
-| Whether one rotated `.1` copy fits "single log file" | allowed | `applog.c` `rotate()` |
-| Disk-space (<10%) and thermal checks | not in cam_proc; belong to hub | — |
-
-## M3 interim decisions (camera only)
-
-The MPU-6050 boards we have are defective, so M3 builds and tests only `cam_proc`. These are deliberate, temporary deviations from the M2 design:
-
-| # | Deviation | M2 design | Reverts when |
-|---|---|---|---|
-| 1 | `cam_proc` writes the application log itself (`src/common/applog.c`) | Only `hub` persists application logs | hub exists; applog moves into hub |
-| 2 | No supervisor, hub or IPC. `cam_proc` is started by hand | supervisor + Unix domain sockets | mechanism E work starts |
-| 3 | Log is `./posture.log` in the working directory (`--log PATH` overrides) | `/var/lib/posture/` | systemd deployment |
-| 4 | No marker detection. `markers_on_frame()` is an empty, student-owned seam | HSV markers, centroids, CVA | Tiffany implements it |
-
-### Camera capture
-- `/dev/video0`, V4L2, YUYV 320×240, 5 fps requested, 4 mmap buffers. The format and frame interval the driver actually grants are logged in `CAM_OPEN` (plus `CAM_FORMAT_MISMATCH` if the size differs).
-- Frames stay in the mmap buffers and are requeued right after the callback. Nothing derived from pixels is logged.
-- Each dequeue waits at most 1 s (`poll`). A timeout is a stall. 5 consecutive stalls close the device, report `CAM_ABSENT op=stall`, and reopen it immediately.
-- Unplug (`ENODEV`/`EIO`/`ENOENT`/`ENXIO`/`EBUSY`, or `POLLERR`) closes the device, logs `CAM_ABSENT` once, and retries every 5 s. Failed retries are counted in `CAM_SUMMARY`, not logged one by one. Reconnecting logs `CAM_RECONNECTED down_ms=…`.
-- A wrong device or unsupported format is `CAM_FATAL`: the process exits 1.
-
-### Log format
-One record per line:
-
-```
-<CLOCK_MONOTONIC s.ns> <UTC ISO-8601 ms> <proc> <EVENT> key=value ... *<crc32>
-```
-
-- The CRC-32 (IEEE, lowercase hex) covers every byte before ` *`. Records are at most 512 bytes; an oversized body is replaced by `truncated=1`. CR/LF in values become `_`.
-- Each record goes out in one `write()` on an `O_APPEND` fd. A failed write is truncated back out of the file.
-- On open, an unterminated tail is dropped, then the final complete line is dropped if its CRC fails. A `LOG_TORN_REPAIRED bytes=N` record follows.
-- Events: `CAM_START`, `CAM_OPEN`, `CAM_FORMAT_MISMATCH`, `CAM_SUMMARY`, `CAM_STALL`, `CAM_ABSENT`, `CAM_RECONNECTED`, `CAM_FATAL`, `CAM_STOP`, `HEALTH` (hourly: uptime, RSS, totals), `LOG_TORN_REPAIRED`, `LOG_ROTATED`.
+- Events: `CAM_START`, `CAM_OPEN`, `CAM_FORMAT_MISMATCH`, `CAM_SUMMARY` (capture stats plus `mk_frames`, `mk_found`, `mk_none`, `mk_skip`, `cva_deg`, `cva_conf`), `CAM_STALL`, `CAM_ABSENT`, `CAM_RECONNECTED`, `CAM_FATAL`, `CAM_STOP`, `HEALTH` (hourly: uptime, RSS, totals), `LOG_TORN_REPAIRED`, `LOG_ROTATED`.
 
 ### Open decisions (placeholders, team to confirm)
 | Item | Placeholder | Where |

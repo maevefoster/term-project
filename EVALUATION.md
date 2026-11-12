@@ -84,5 +84,7 @@ no labeled sessions.
 4. If scattered pixels persist on a clean background, the team decides how the
    detector should handle them (CLAUDE.md section 8). Ranges are not changed from this one run.
 
-**Open item:** the driver reported tpf=1/30 and cam_proc measured about 10 fps
-earlier, but the design says 5 fps. Not yet investigated.
+**Frame rate (resolved 2026-11-12):** the driver reported tpf=1/30 and cam_proc
+measured about 10 fps earlier, but the design says 5 fps. The team decided to run
+at the rate the driver grants, so other webcams work unchanged (DESIGN.md, Camera
+capture). Why the measured rate was below the granted 30 fps was not investigated.
