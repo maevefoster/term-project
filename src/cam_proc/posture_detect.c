@@ -8,7 +8,7 @@
  *
  * Camera must view the user from the SIDE. Stickers:
  *   ear marker (tragus)  - GREEN by default
- *   neck marker (C7)     - BLUE by default
+ *   neck marker (C7)     - PURPLE by default (was blue; see DESIGN.md)
  * Change the hue ranges in posture_cfg_default() to match your stickers.
  *
  * Built into cam_proc via the Makefile; called from markers.c.
@@ -22,11 +22,13 @@
 
 void posture_cfg_default(posture_cfg_t *c)
 {
-    /* Green and blue are ~120 deg apart and far from skin hue (~0-25 deg),
-     * so neither should match the face or neck. Use neon/fluorescent
-     * stickers so saturation stays high in dim or warm light. */
+    /* Green and purple are far from skin hue (~0-25 deg), so neither should
+     * match the face or neck. Use neon/fluorescent stickers so saturation
+     * stays high in dim or warm light.
+     * PROVISIONAL: the purple range is not yet measured on our sticky note.
+     * Measure with `make camdebug` (click the note) and adjust. */
     c->ear = (hsv_range_t){ 90.f, 165.f, 0.50f, 0.25f };   /* neon green */
-    c->c7  = (hsv_range_t){ 200.f, 255.f, 0.50f, 0.20f };  /* blue       */
+    c->c7  = (hsv_range_t){ 260.f, 310.f, 0.50f, 0.20f };  /* purple     */
     c->min_pixels   = 12;
     c->good_pixels  = 60;
     c->max_sigma_px = 12.f;

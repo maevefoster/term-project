@@ -21,9 +21,11 @@ static int failures;
 
 enum { W = 320, H = 240, PAD = 64 };
 
-/* BT.601 limited-range YUV of pure green / pure blue */
-static const uint8_t GY = 145, GU = 54, GV = 34;   /* green (ear) */
-static const uint8_t BY = 41, BU = 240, BV = 110;  /* blue (C7) */
+/* BT.601 limited-range YUV of pure green / purple / blue.
+ * Purple is RGB (128,0,255), hue 270 deg; blue is RGB (0,0,255), hue 240 deg. */
+static const uint8_t GY = 145, GU = 54, GV = 34;    /* green (ear) */
+static const uint8_t PY = 74, PU = 221, PV = 166;   /* purple (C7) */
+static const uint8_t BLY = 41, BLU = 240, BLV = 110; /* blue: no longer a marker */
 
 static uint8_t g_frame[(W * 2 + PAD) * H]; /* large; keep off the stack */
 
@@ -58,7 +60,7 @@ static void test_upright_pair(void)
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
     square(g_frame, W * 2, 190, 100, GY, GU, GV); /* ear */
-    square(g_frame, W * 2, 150, 160, BY, BU, BV); /* C7 */
+    square(g_frame, W * 2, 150, 160, PY, PU, PV); /* C7 */
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_OK);
@@ -78,7 +80,7 @@ static void test_mirrored_pair(void)
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
     square(g_frame, W * 2, 110, 100, GY, GU, GV);
-    square(g_frame, W * 2, 150, 160, BY, BU, BV);
+    square(g_frame, W * 2, 150, 160, PY, PU, PV);
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_OK);
@@ -120,10 +122,27 @@ static void test_ear_below_c7(void)
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
     square(g_frame, W * 2, 190, 160, GY, GU, GV); /* ear lower than C7 */
-    square(g_frame, W * 2, 150, 100, BY, BU, BV);
+    square(g_frame, W * 2, 150, 100, PY, PU, PV);
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_NO_USER);
+}
+
+static void test_blue_is_not_c7(void)
+{
+    posture_cfg_t cfg;
+    posture_obs_t o;
+
+    /* The neck marker is purple now; a blue patch (e.g. a blue poster or
+     * object in the background) must not be picked up as C7. */
+    posture_cfg_default(&cfg);
+    fill_grey(g_frame, W * 2);
+    square(g_frame, W * 2, 190, 100, GY, GU, GV);     /* ear (green) */
+    square(g_frame, W * 2, 150, 160, BLY, BLU, BLV);  /* blue where C7 would be */
+
+    CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
+    CHECK(o.status == POSTURE_NO_USER);
+    CHECK(o.ear.found && !o.c7.found);
 }
 
 static void test_bad_args(void)
@@ -150,7 +169,7 @@ static void test_markers_seam(void)
 
     fill_grey(g_frame, W * 2);
     square(g_frame, W * 2, 190, 100, GY, GU, GV);
-    square(g_frame, W * 2, 150, 160, BY, BU, BV);
+    square(g_frame, W * 2, 150, 160, PY, PU, PV);
     markers_on_frame(g_frame, packed, W, H, W * 2);      /* found */
     markers_on_frame(g_frame, packed - 1, W, H, W * 2);  /* short buffer */
     markers_on_frame(g_frame, sizeof g_frame, W, H, W * 2 + PAD); /* padded rows */
@@ -178,6 +197,7 @@ int main(void)
     test_empty_frame();
     test_one_marker();
     test_ear_below_c7();
+    test_blue_is_not_c7();
     test_bad_args();
     test_markers_seam();
 
