@@ -28,7 +28,7 @@ void posture_cfg_default(posture_cfg_t *c)
      * PROVISIONAL: the purple range is not yet measured on our sticky note.
      * Measure with `make camdebug` (click the note) and adjust. */
     c->ear = (hsv_range_t){ 90.f, 165.f, 0.50f, 0.25f };   /* neon green */
-    c->c7  = (hsv_range_t){ 260.f, 300.f, 0.50f, 0.20f };  /* purple     */
+    c->c7  = (hsv_range_t){ 260.f, 310.f, 0.50f, 0.20f };  /* purple     */
     c->min_pixels   = 12;
     c->good_pixels  = 60;
     c->max_sigma_px = 12.f;
