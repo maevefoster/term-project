@@ -191,7 +191,7 @@ static int rotate(struct applog *lg)
     return 0;
 }
 
-static int format_line(const struct applog *lg, char *buf, size_t cap,
+static int format_line(const char *proc, char *buf, size_t cap,
                        const char *event, const char *fmt, va_list ap)
 {
     struct timespec mono, real;
@@ -209,7 +209,7 @@ static int format_line(const struct applog *lg, char *buf, size_t cap,
                  (long long)mono.tv_sec, (long)mono.tv_nsec,
                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                  tm.tm_hour, tm.tm_min, tm.tm_sec, (long)(real.tv_nsec / 1000000L),
-                 lg->proc, event);
+                 proc, event);
     if (n < 0 || (size_t)n >= room)
         return -1;
     len = (size_t)n;
@@ -260,8 +260,14 @@ static int write_all(int fd, const char *buf, size_t len)
 
 int applog_vwrite(struct applog *lg, const char *event, const char *fmt, va_list ap)
 {
+    return applog_vwrite_as(lg, lg->proc, event, fmt, ap);
+}
+
+int applog_vwrite_as(struct applog *lg, const char *proc, const char *event,
+                     const char *fmt, va_list ap)
+{
     char line[APPLOG_LINE_MAX + 1];
-    int len = format_line(lg, line, sizeof line, event, fmt, ap);
+    int len = format_line(proc, line, sizeof line, event, fmt, ap);
 
     if (len < 0) {
         errno = EOVERFLOW;
@@ -299,6 +305,18 @@ int applog_write(struct applog *lg, const char *event, const char *fmt, ...)
 
     va_start(ap, fmt);
     r = applog_vwrite(lg, event, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+int applog_write_as(struct applog *lg, const char *proc, const char *event,
+                    const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = applog_vwrite_as(lg, proc, event, fmt, ap);
     va_end(ap);
     return r;
 }

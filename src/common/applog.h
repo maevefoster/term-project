@@ -51,6 +51,15 @@ int applog_write(struct applog *lg, const char *event, const char *fmt, ...)
 int applog_vwrite(struct applog *lg, const char *event, const char *fmt, va_list ap)
     __attribute__((format(printf, 3, 0)));
 
+/* Same, but under another process name: hub logs events received from
+ * imu_proc/cam_proc with the sender's name in the <proc> field. */
+int applog_write_as(struct applog *lg, const char *proc, const char *event,
+                    const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+int applog_vwrite_as(struct applog *lg, const char *proc, const char *event,
+                     const char *fmt, va_list ap)
+    __attribute__((format(printf, 4, 0)));
+
 void applog_close(struct applog *lg);
 
 uint32_t applog_crc32(const void *buf, size_t len);
