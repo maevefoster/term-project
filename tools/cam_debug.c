@@ -134,7 +134,48 @@ static void draw_blob(SDL_Renderer *r, const blob_t *b)
 
 static void usage(const char *argv0)
 {
-    fprintf(stderr, "usage: %s [--dev PATH]\n  default device %s\n", argv0, DEBUG_DEV);
+    fprintf(stderr,
+            "usage: %s [--dev PATH] [tuning overrides]\n"
+            "  default device %s\n"
+            "Tuning overrides try values live; they change only this viewer's copy of the\n"
+            "detector config, never posture_detect.c. Defaults come from posture_cfg_default().\n"
+            "  --c7-hue LO,HI   --c7-smin F   --c7-vmin F     C7 (purple) range; hue 0-360, S/V 0-1\n"
+            "  --ear-hue LO,HI  --ear-smin F  --ear-vmin F    EAR (green) range\n"
+            "  --max-sigma F    --min-pixels N                blob spread limit (px), min pixel count\n",
+            argv0, DEBUG_DEV);
+}
+
+/* Parses a finite float in [lo, hi]; returns 0 on success. */
+static int parse_float(const char *s, float lo, float hi, float *out)
+{
+    char *end = NULL;
+    float v;
+
+    errno = 0;
+    v = strtof(s, &end);
+    if (errno != 0 || end == s || *end != '\0' || !(v >= lo && v <= hi))
+        return -1;
+    *out = v;
+    return 0;
+}
+
+/* Parses "LO,HI" hue degrees, each in [0, 360]; returns 0 on success. */
+static int parse_hue(const char *s, float *lo, float *hi)
+{
+    char *comma = strchr(s, ',');
+    char buf[32];
+    size_t n;
+
+    if (!comma)
+        return -1;
+    n = (size_t)(comma - s);
+    if (n == 0 || n >= sizeof buf)
+        return -1;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    if (parse_float(buf, 0.f, 360.f, lo) != 0)
+        return -1;
+    return parse_float(comma + 1, 0.f, 360.f, hi);
 }
 
 int main(int argc, char **argv)
@@ -151,18 +192,46 @@ int main(int argc, char **argv)
     long ear_px = 0, c7_px = 0;
     Uint32 next_report = 0;
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--dev") == 0 && i + 1 < argc) {
-            dev = argv[++i];
-        } else {
-            usage(argv[0]);
-            return 2;
-        }
-    }
-
     cam_init(&cam);
     posture_cfg_default(&cfg);
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
+        float f = 0.f;
+        int bad = 1;
+
+        if (!v) {
+            /* every option takes a value */
+        } else if (strcmp(a, "--dev") == 0) {
+            dev = v;
+            bad = 0;
+        } else if (strcmp(a, "--c7-hue") == 0) {
+            bad = parse_hue(v, &cfg.c7.h_lo, &cfg.c7.h_hi);
+        } else if (strcmp(a, "--ear-hue") == 0) {
+            bad = parse_hue(v, &cfg.ear.h_lo, &cfg.ear.h_hi);
+        } else if (strcmp(a, "--c7-smin") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.c7.s_min);
+        } else if (strcmp(a, "--c7-vmin") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.c7.v_min);
+        } else if (strcmp(a, "--ear-smin") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.ear.s_min);
+        } else if (strcmp(a, "--ear-vmin") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.ear.v_min);
+        } else if (strcmp(a, "--max-sigma") == 0) {
+            bad = parse_float(v, 1.f, 1000.f, &cfg.max_sigma_px);
+        } else if (strcmp(a, "--min-pixels") == 0) {
+            bad = parse_float(v, 1.f, 100000.f, &f);
+            if (!bad)
+                cfg.min_pixels = (int)f;
+        }
+        if (bad) {
+            usage(argv[0]);
+            return 2;
+        }
+        i++; /* consumed the value */
+    }
 
     if (cam_open(&cam, dev, CAM_W, CAM_H, CAM_FPS) != CAM_OK) {
         fprintf(stderr, "cam_debug: cannot open %s (op=%s errno=%d). "
@@ -203,6 +272,11 @@ int main(int argc, char **argv)
            "  click a pixel for its H/S/V; t = toggle tint; q/Esc = quit\n",
            dev, w, h, (unsigned)cam.tpf_num, (unsigned)cam.tpf_den, cfg.min_pixels,
            (double)cfg.max_sigma_px, (double)cfg.min_sep_px);
+    /* The ranges in use are printed so a recorded run documents its own settings. */
+    printf("  ranges in use: EAR hue %.0f-%.0f S>=%.2f V>=%.2f | C7 hue %.0f-%.0f S>=%.2f V>=%.2f\n",
+           (double)cfg.ear.h_lo, (double)cfg.ear.h_hi, (double)cfg.ear.s_min,
+           (double)cfg.ear.v_min, (double)cfg.c7.h_lo, (double)cfg.c7.h_hi,
+           (double)cfg.c7.s_min, (double)cfg.c7.v_min);
 
     while (running) {
         SDL_Event e;
