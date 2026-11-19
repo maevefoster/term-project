@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "applog.h"
+#include "heartbeat.h"
 #include "hub_state.h"
 #include "ipc_client.h"
 #include "msg.h"
@@ -60,6 +61,7 @@ struct hub_link {
 
 struct hub {
     struct applog log;
+    struct heartbeat hb;
     int epfd, tfd, sfd;
     struct hub_link links[2];
     enum hub_mode mode;
@@ -236,6 +238,8 @@ static void on_tick(struct hub *h, int64_t now, int64_t start, int64_t *next_sum
     enum hub_mode m = hub_mode_eval(hub_source_fresh(&imu->st, now),
                                     hub_source_fresh(&cam->st, now));
 
+    /* From the 1 Hz tick, so a stuck event loop stops the heartbeats. */
+    heartbeat_beat(&h->hb, now);
     if (m != h->mode) {
         applog_write(&h->log, "HUB_MODE", "from=%s to=%s imu=%s cam=%s",
                      hub_mode_name(h->mode), hub_mode_name(m),
@@ -398,12 +402,14 @@ int main(int argc, char **argv)
         }
     }
 
+    heartbeat_init(&h.hb, "hub");
     start = mono_ns();
     next_summary = start + HUB_SUMMARY_S * NS_PER_S;
     next_health = start + HUB_HEALTH_S * NS_PER_S;
-    applog_write(&h.log, "HUB_START", "ver=%d pid=%ld run_dir=%s stale_ms=%lld mode=%s log_cap=%lld",
+    applog_write(&h.log, "HUB_START",
+                 "ver=%d pid=%ld run_dir=%s stale_ms=%lld mode=%s log_cap=%lld heartbeat=%s",
                  MSG_VERSION, (long)getpid(), run_dir, (long long)(HUB_STALE_NS / NS_PER_MS),
-                 hub_mode_name(h.mode), (long long)h.log.cap);
+                 hub_mode_name(h.mode), (long long)h.log.cap, h.hb.fd >= 0 ? "on" : "off");
 
     while (!stop) {
         struct epoll_event evs[HUB_MAX_EVENTS];

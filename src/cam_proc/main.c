@@ -20,6 +20,7 @@
 #include <linux/videodev2.h>
 
 #include "frame_stats.h"
+#include "heartbeat.h"
 #include "ipc_client.h"
 #include "markers.h"
 #include "msg.h"
@@ -251,6 +252,7 @@ int main(int argc, char **argv)
         { NULL, 0, NULL, 0 },
     };
     struct cam_ctx c;
+    struct heartbeat hb;
     const char *run_dir = IPC_DEFAULT_RUN_DIR;
     int64_t start, next_summary, next_health, next_data, next_retry = 0;
     int exit_code = 0;
@@ -294,9 +296,12 @@ int main(int argc, char **argv)
     next_summary = start + CAM_SUMMARY_S * NS_PER_S;
     next_health = start + CAM_HEALTH_S * NS_PER_S;
     next_data = start;
-    ipc_event(&c.ipc, "CAM_START", "ver=%d pid=%ld dev=%s want=%ux%u@%u summary_s=%d",
+    heartbeat_init(&hb, "cam_proc");
+    ipc_event(&c.ipc, "CAM_START",
+              "ver=%d pid=%ld dev=%s want=%ux%u@%u summary_s=%d heartbeat=%s",
               MSG_VERSION, (long)getpid(), c.dev_path, (unsigned)CAM_WIDTH,
-              (unsigned)CAM_HEIGHT, (unsigned)CAM_FPS, CAM_SUMMARY_S);
+              (unsigned)CAM_HEIGHT, (unsigned)CAM_FPS, CAM_SUMMARY_S,
+              hb.fd >= 0 ? "on" : "off");
 
     while (!g_stop) {
         int64_t now = mono_ns();
@@ -342,6 +347,10 @@ int main(int argc, char **argv)
         }
 
         now = mono_ns();
+        /* Only reached when the open/dequeue above returned (each waits at
+         * most CAM_POLL_MS), so a V4L2 call that never returns stops the
+         * heartbeats. */
+        heartbeat_beat(&hb, now);
         if (now >= next_data) {
             send_data(&c, now);
             next_data = next_deadline(next_data, now, CAM_DATA_NS);

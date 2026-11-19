@@ -19,6 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "heartbeat.h"
 #include "ipc_client.h"
 #include "mpu6050.h"
 #include "msg.h"
@@ -264,6 +265,7 @@ int main(int argc, char **argv)
         { NULL, 0, NULL, 0 },
     };
     struct imu_ctx c;
+    struct heartbeat hb;
     const char *run_dir = IPC_DEFAULT_RUN_DIR;
     int64_t start, next_tick, next_summary, next_health;
     unsigned report_tick = 0;
@@ -308,9 +310,11 @@ int main(int argc, char **argv)
     next_tick = start;
     next_summary = start + IMU_SUMMARY_S * NS_PER_S;
     next_health = start + IMU_HEALTH_S * NS_PER_S;
-    ipc_event(&c.ipc, "IMU_START", "ver=%d pid=%ld dev=%s addr=0x%02x rate_hz=%d summary_s=%d",
+    heartbeat_init(&hb, "imu_proc");
+    ipc_event(&c.ipc, "IMU_START",
+              "ver=%d pid=%ld dev=%s addr=0x%02x rate_hz=%d summary_s=%d heartbeat=%s",
               MSG_VERSION, (long)getpid(), c.dev_path, (unsigned)MPU_DEFAULT_ADDR,
-              IMU_RATE_HZ, IMU_SUMMARY_S);
+              IMU_RATE_HZ, IMU_SUMMARY_S, hb.fd >= 0 ? "on" : "off");
 
     while (!g_stop) {
         int64_t now;
@@ -333,6 +337,9 @@ int main(int argc, char **argv)
         }
 
         now = mono_ns();
+        /* Only reached when this tick's I2C work returned, so a stuck read
+         * stops the heartbeats. */
+        heartbeat_beat(&hb, now);
         if (now >= next_summary) {
             log_summary(&c, now);
             next_summary = next_deadline(next_summary, now, IMU_SUMMARY_S * NS_PER_S);

@@ -24,6 +24,7 @@ VALGRIND := valgrind --leak-check=full --show-leak-kinds=definite,indirect --tra
 
 COMMON_SRC := src/common/applog.c
 IPC_SRC    := src/common/msg.c src/common/ipc_client.c
+HB_SRC     := src/common/heartbeat.c
 CAM_SRC    := src/cam_proc/main.c src/cam_proc/v4l2_cap.c src/cam_proc/frame_stats.c \
               src/cam_proc/markers.c src/cam_proc/posture_detect.c
 IMU_SRC    := src/imu_proc/main.c src/imu_proc/mpu6050.c
@@ -31,7 +32,7 @@ HUB_SRC    := src/hub/main.c src/hub/hub_state.c src/common/msg.c
 SUP_SRC    := src/supervisor/main.c src/supervisor/sup_policy.c
 TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_posture_detect \
               $(BUILD)/test_mpu6050 $(BUILD)/test_msg $(BUILD)/test_hub_state $(BUILD)/test_ipc \
-              $(BUILD)/test_sup_policy
+              $(BUILD)/test_sup_policy $(BUILD)/test_heartbeat
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
@@ -49,13 +50,16 @@ $(BUILD)/supervisor: $(call obj,$(SUP_SRC) $(IPC_SRC))
 $(BUILD)/test_sup_policy: $(call obj,tests/test_sup_policy.c src/supervisor/sup_policy.c)
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
 
-$(BUILD)/hub: $(call obj,$(HUB_SRC) $(COMMON_SRC))
+$(BUILD)/test_heartbeat: $(call obj,tests/test_heartbeat.c $(HB_SRC))
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
+
+$(BUILD)/hub: $(call obj,$(HUB_SRC) $(COMMON_SRC) $(HB_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
 
-$(BUILD)/cam_proc: $(call obj,$(CAM_SRC) $(IPC_SRC))
+$(BUILD)/cam_proc: $(call obj,$(CAM_SRC) $(IPC_SRC) $(HB_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
 
-$(BUILD)/imu_proc: $(call obj,$(IMU_SRC) $(IPC_SRC))
+$(BUILD)/imu_proc: $(call obj,$(IMU_SRC) $(IPC_SRC) $(HB_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
 
 $(BUILD)/test_msg: $(call obj,tests/test_msg.c src/common/msg.c)
