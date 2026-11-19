@@ -44,7 +44,7 @@ BINS         := supervisor hub imu_proc cam_proc
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
-.PHONY: all test asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean \
+.PHONY: all test test-purple-pair asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean \
         install uninstall
 
 all: $(BUILD)/supervisor $(BUILD)/hub $(BUILD)/cam_proc $(BUILD)/imu_proc
@@ -104,6 +104,16 @@ $(BUILD)/test_posture_detect: $(call obj,tests/test_posture_detect.c src/cam_pro
 
 test: $(TESTS)
 	@set -e; for t in $(TESTS); do echo "== $$t"; ./$$t; done
+
+# Spec tests for the purple-only (two purple tags, connected clusters) detector.
+# Written before the implementation, so expected to FAIL until it exists; kept
+# out of `test` so the normal checks stay green. Once they pass, add
+# $(BUILD)/test_purple_pair to TESTS and remove this target.
+$(BUILD)/test_purple_pair: $(call obj,tests/test_purple_pair.c src/cam_proc/posture_detect.c)
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
+
+test-purple-pair: $(BUILD)/test_purple_pair
+	./$(BUILD)/test_purple_pair
 
 asan:
 	$(MAKE) BUILD=build-asan EXTRA_CFLAGS="$(SAN)" all test
