@@ -7,18 +7,23 @@
  * #included below so its static helpers and its pixel mask are used in
  * place; this tool adds no color or detection logic of its own.
  *
- *   red tint     pixels the detector marks as EAR   (green sticker range)
- *   yellow tint  pixels the detector marks as C7    (purple sticker range)
- *   white box    a marker blob that survived the detector's size/spread checks
- *   white line   ear-to-C7 line, drawn when the detector reports a valid CVA
+ * Both tags are purple, found as connected clusters; the upper cluster is the
+ * ear tag and the lower one the neck (C7) tag.
  *
- * The window title and stdout (once a second) show, per color, the RAW count
- * of matching pixels (before the detector's min_pixels check) and the count
- * kept for the blob. A raw count of 0 means the color range misses the
- * sticker; a small non-zero count means the sticker is too small/far.
+ *   red tint     purple pixels in a cluster the detector REJECTED (stray, too
+ *                small, too spread out, too thin or too hollow)
+ *   yellow tint  purple pixels in a cluster that passed the sticker checks
+ *   white box    the ear / neck tag, drawn only when the frame is accepted
+ *   white line   ear-to-neck line, drawn when the detector reports a valid CVA
+ *
+ * The window title and stdout (once a second) show the number of purple
+ * pixels, how many purple clusters there were, how many passed the sticker
+ * checks (a frame needs exactly 2) and, when the frame is rejected, why.
+ * Many red pixels with few yellow ones means the clusters fail the size or
+ * shape checks; no tint at all means the purple range misses the sticker.
  *
  * Click a pixel: prints its H/S/V (5x5 average, via the detector's own
- * conversion) and whether each color range accepts it. Use these numbers to
+ * conversion) and whether the purple range accepts it. Use these numbers to
  * pick ranges; the choice itself is a team decision (CLAUDE.md section 8).
  *
  * Keys: t = toggle tint, q or Esc = quit.
@@ -45,8 +50,8 @@
 #define POLL_MS      200
 #define SAMPLE_R     2 /* click sampling: (2*R+1)^2 pixel average */
 
-#define TINT_EAR     0xC0FF0000u /* ARGB: red    */
-#define TINT_C7      0xC0FFFF00u /* ARGB: yellow */
+#define TINT_PURPLE  0xC0FF0000u /* ARGB: red    - purple, cluster rejected  */
+#define TINT_GOOD    0xC0FFFF00u /* ARGB: yellow - purple, cluster accepted  */
 
 static uint8_t g_frame[MAX_W * MAX_H * 2];
 static uint32_t g_overlay[MAX_W * MAX_H];
@@ -68,20 +73,33 @@ static void on_frame(const struct cam_frame *f, void *ctx)
     g->got = 1;
 }
 
-/* Fills g_overlay from the detector's mask; returns raw per-color counts. */
-static void build_overlay(int w, int h, int show_tint, long *ear_px, long *c7_px)
+/* Fills g_overlay from the detector's mask; returns the number of purple
+ * pixels and how many of them sit in accepted (sticker-like) clusters. */
+static void build_overlay(int w, int h, int show_tint, long *purple_px, long *good_px)
 {
-    *ear_px = 0;
-    *c7_px = 0;
+    *purple_px = 0;
+    *good_px = 0;
     for (int i = 0; i < w * h; i++) {
         uint8_t m = g_mask[i];
 
-        if (m & 1)
-            (*ear_px)++;
-        if (m & 2)
-            (*c7_px)++;
-        g_overlay[i] = !show_tint ? 0u : (m & 1) ? TINT_EAR : (m & 2) ? TINT_C7 : 0u;
+        if (m & PX_PURPLE)
+            (*purple_px)++;
+        if (m & PX_GOOD)
+            (*good_px)++;
+        g_overlay[i] = !show_tint ? 0u : (m & PX_GOOD) ? TINT_GOOD
+                                       : (m & PX_PURPLE) ? TINT_PURPLE : 0u;
     }
+}
+
+static const char *reject_name(posture_reject_t r)
+{
+    switch (r) {
+    case REJ_NONE:        return "none";
+    case REJ_NOT_TWO:     return "not-two-clusters";
+    case REJ_TOO_CLOSE:   return "too-close";
+    case REJ_SAME_HEIGHT: return "same-height";
+    }
+    return "?";
 }
 
 static void sample_pixel(const posture_cfg_t *cfg, int px, int py, int w, int h)
@@ -105,12 +123,11 @@ static void sample_pixel(const posture_cfg_t *cfg, int px, int py, int w, int h)
     if (n == 0)
         return;
     yuv_to_hsv((int)(sy / n), (int)(su / n), (int)(sv / n), &hh, &ss, &vv);
-    printf("click (%d,%d): H=%.0f S=%.2f V=%.2f | detector mask: %s%s | "
-           "ear range %s, c7 range %s\n",
+    printf("click (%d,%d): H=%.0f S=%.2f V=%.2f | detector mask: %s%s | purple range %s\n",
            px, py, (double)hh, (double)ss, (double)vv,
-           (g_mask[py * w + px] & 1) ? "EAR " : "", (g_mask[py * w + px] & 2) ? "C7" : "",
-           in_range(&cfg->ear, hh, ss, vv) ? "ACCEPTS" : "rejects",
-           in_range(&cfg->c7, hh, ss, vv) ? "ACCEPTS" : "rejects");
+           (g_mask[py * w + px] & PX_PURPLE) ? "PURPLE " : "",
+           (g_mask[py * w + px] & PX_GOOD) ? "GOOD-CLUSTER" : "",
+           in_range(&cfg->marker, hh, ss, vv) ? "ACCEPTS" : "rejects");
     fflush(stdout);
 }
 
@@ -139,9 +156,10 @@ static void usage(const char *argv0)
             "  default device %s\n"
             "Tuning overrides try values live; they change only this viewer's copy of the\n"
             "detector config, never posture_detect.c. Defaults come from posture_cfg_default().\n"
-            "  --c7-hue LO,HI   --c7-smin F   --c7-vmin F     C7 (purple) range; hue 0-360, S/V 0-1\n"
-            "  --ear-hue LO,HI  --ear-smin F  --ear-vmin F    EAR (green) range\n"
-            "  --max-sigma F    --min-pixels N                blob spread limit (px), min pixel count\n",
+            "  --hue LO,HI  --smin F  --vmin F        purple range; hue 0-360, S/V 0-1\n"
+            "  --min-pixels N  --max-sigma F          smallest cluster (px), largest spread (px)\n"
+            "  --min-fill F  --max-aspect F           cluster area / bounding box, box long/short side\n"
+            "  --min-sep F  --min-dy F                tag centroid distance, vertical distance (px)\n",
             argv0, DEBUG_DEV);
 }
 
@@ -189,7 +207,7 @@ int main(int argc, char **argv)
     SDL_Renderer *ren = NULL;
     SDL_Texture *video = NULL, *overlay = NULL;
     int w, h, show_tint = 1, running = 1, have_obs = 0, rc = 1;
-    long ear_px = 0, c7_px = 0;
+    long purple_px = 0, good_px = 0;
     Uint32 next_report = 0;
 
     cam_init(&cam);
@@ -207,20 +225,22 @@ int main(int argc, char **argv)
         } else if (strcmp(a, "--dev") == 0) {
             dev = v;
             bad = 0;
-        } else if (strcmp(a, "--c7-hue") == 0) {
-            bad = parse_hue(v, &cfg.c7.h_lo, &cfg.c7.h_hi);
-        } else if (strcmp(a, "--ear-hue") == 0) {
-            bad = parse_hue(v, &cfg.ear.h_lo, &cfg.ear.h_hi);
-        } else if (strcmp(a, "--c7-smin") == 0) {
-            bad = parse_float(v, 0.f, 1.f, &cfg.c7.s_min);
-        } else if (strcmp(a, "--c7-vmin") == 0) {
-            bad = parse_float(v, 0.f, 1.f, &cfg.c7.v_min);
-        } else if (strcmp(a, "--ear-smin") == 0) {
-            bad = parse_float(v, 0.f, 1.f, &cfg.ear.s_min);
-        } else if (strcmp(a, "--ear-vmin") == 0) {
-            bad = parse_float(v, 0.f, 1.f, &cfg.ear.v_min);
+        } else if (strcmp(a, "--hue") == 0) {
+            bad = parse_hue(v, &cfg.marker.h_lo, &cfg.marker.h_hi);
+        } else if (strcmp(a, "--smin") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.marker.s_min);
+        } else if (strcmp(a, "--vmin") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.marker.v_min);
         } else if (strcmp(a, "--max-sigma") == 0) {
             bad = parse_float(v, 1.f, 1000.f, &cfg.max_sigma_px);
+        } else if (strcmp(a, "--min-fill") == 0) {
+            bad = parse_float(v, 0.f, 1.f, &cfg.min_fill);
+        } else if (strcmp(a, "--max-aspect") == 0) {
+            bad = parse_float(v, 1.f, 100.f, &cfg.max_aspect);
+        } else if (strcmp(a, "--min-sep") == 0) {
+            bad = parse_float(v, 0.f, 1000.f, &cfg.min_sep_px);
+        } else if (strcmp(a, "--min-dy") == 0) {
+            bad = parse_float(v, 0.f, 1000.f, &cfg.min_dy_px);
         } else if (strcmp(a, "--min-pixels") == 0) {
             bad = parse_float(v, 1.f, 100000.f, &f);
             if (!bad)
@@ -266,17 +286,18 @@ int main(int argc, char **argv)
         goto sdl_fail;
     SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
 
-    printf("cam_debug: %s %dx%d, tpf=%u/%u | detector limits: min_pixels=%d "
-           "max_sigma_px=%.1f min_sep_px=%.1f\n"
-           "  red tint = detector says EAR (green range), yellow tint = C7 (purple range)\n"
+    printf("cam_debug: %s %dx%d, tpf=%u/%u\n"
+           "  yellow tint = purple pixels in an accepted cluster; red tint = purple pixels in a rejected one\n"
            "  click a pixel for its H/S/V; t = toggle tint; q/Esc = quit\n",
-           dev, w, h, (unsigned)cam.tpf_num, (unsigned)cam.tpf_den, cfg.min_pixels,
-           (double)cfg.max_sigma_px, (double)cfg.min_sep_px);
-    /* The ranges in use are printed so a recorded run documents its own settings. */
-    printf("  ranges in use: EAR hue %.0f-%.0f S>=%.2f V>=%.2f | C7 hue %.0f-%.0f S>=%.2f V>=%.2f\n",
-           (double)cfg.ear.h_lo, (double)cfg.ear.h_hi, (double)cfg.ear.s_min,
-           (double)cfg.ear.v_min, (double)cfg.c7.h_lo, (double)cfg.c7.h_hi,
-           (double)cfg.c7.s_min, (double)cfg.c7.v_min);
+           dev, w, h, (unsigned)cam.tpf_num, (unsigned)cam.tpf_den);
+    /* The settings in use are printed so a recorded run documents itself. */
+    printf("  ranges in use: purple hue %.0f-%.0f S>=%.2f V>=%.2f\n"
+           "  limits in use: min_pixels=%d max_sigma_px=%.1f min_fill=%.2f max_aspect=%.1f "
+           "min_sep_px=%.1f min_dy_px=%.1f\n",
+           (double)cfg.marker.h_lo, (double)cfg.marker.h_hi, (double)cfg.marker.s_min,
+           (double)cfg.marker.v_min, cfg.min_pixels, (double)cfg.max_sigma_px,
+           (double)cfg.min_fill, (double)cfg.max_aspect, (double)cfg.min_sep_px,
+           (double)cfg.min_dy_px);
 
     while (running) {
         SDL_Event e;
@@ -290,7 +311,7 @@ int main(int argc, char **argv)
         if (cr == CAM_OK && grab.got && grab.len >= (size_t)w * (size_t)h * 2u) {
             if (posture_detect(g_frame, w, h, &cfg, &obs) == 0)
                 have_obs = 1;
-            build_overlay(w, h, show_tint, &ear_px, &c7_px);
+            build_overlay(w, h, show_tint, &purple_px, &good_px);
             SDL_UpdateTexture(video, NULL, g_frame, w * 2);
             SDL_UpdateTexture(overlay, NULL, g_overlay, w * 4);
             SDL_RenderClear(ren);
@@ -314,18 +335,20 @@ int main(int argc, char **argv)
         if (have_obs && SDL_GetTicks() >= next_report) {
             char title[320];
 
-            /* found=0 with a large sigma means the blob was too spread out
-             * (limit cfg.max_sigma_px); at=(x,y) is the centroid. All values
-             * are the detector's own outputs. */
+            /* purple = pixels in the purple range; clusters = touching groups
+             * of them; good = clusters that passed the sticker checks (a frame
+             * needs exactly 2). EAR (upper) and NECK (lower) are filled only
+             * when the frame is accepted. All values are the detector's own. */
             snprintf(title, sizeof title,
-                     "EAR raw=%ld kept=%d found=%d sig=%.1f at=(%.0f,%.0f) | "
-                     "C7 raw=%ld kept=%d found=%d sig=%.1f at=(%.0f,%.0f) | %s CVA=%.1f",
-                     ear_px, obs.ear.npix, obs.ear.found, (double)obs.ear.sigma,
-                     (double)obs.ear.x, (double)obs.ear.y,
-                     c7_px, obs.c7.npix, obs.c7.found, (double)obs.c7.sigma,
-                     (double)obs.c7.x, (double)obs.c7.y,
+                     "purple=%ld clusters=%d good=%d (%ld px) | "
+                     "EAR n=%d sig=%.1f at=(%.0f,%.0f) | NECK n=%d sig=%.1f at=(%.0f,%.0f) | "
+                     "%s CVA=%.1f reject=%s",
+                     purple_px, obs.n_clusters, obs.n_good, good_px,
+                     obs.ear.npix, (double)obs.ear.sigma, (double)obs.ear.x, (double)obs.ear.y,
+                     obs.c7.npix, (double)obs.c7.sigma, (double)obs.c7.x, (double)obs.c7.y,
                      obs.status == POSTURE_OK ? "OK" : "NO_USER",
-                     obs.status == POSTURE_OK ? (double)obs.cva_deg : -1.0);
+                     obs.status == POSTURE_OK ? (double)obs.cva_deg : -1.0,
+                     reject_name(obs.reject));
             SDL_SetWindowTitle(win, title);
             printf("%s\n", title);
             next_report = SDL_GetTicks() + 1000;

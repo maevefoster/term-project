@@ -34,7 +34,8 @@ HUB_SRC    := src/hub/main.c src/hub/hub_state.c src/common/msg.c
 SUP_SRC    := src/supervisor/main.c src/supervisor/sup_policy.c
 TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_posture_detect \
               $(BUILD)/test_mpu6050 $(BUILD)/test_msg $(BUILD)/test_hub_state $(BUILD)/test_ipc \
-              $(BUILD)/test_sup_policy $(BUILD)/test_heartbeat
+              $(BUILD)/test_sup_policy $(BUILD)/test_heartbeat \
+              $(BUILD)/test_purple_pair $(BUILD)/test_posture_selftest
 
 LIBDIR       ?= /usr/local/lib/posture-coach
 UNIT_DIR     ?= /etc/systemd/system
@@ -44,7 +45,7 @@ BINS         := supervisor hub imu_proc cam_proc
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
-.PHONY: all test test-purple-pair asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean \
+.PHONY: all test asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean \
         install uninstall
 
 all: $(BUILD)/supervisor $(BUILD)/hub $(BUILD)/cam_proc $(BUILD)/imu_proc
@@ -105,15 +106,16 @@ $(BUILD)/test_posture_detect: $(call obj,tests/test_posture_detect.c src/cam_pro
 test: $(TESTS)
 	@set -e; for t in $(TESTS); do echo "== $$t"; ./$$t; done
 
-# Spec tests for the purple-only (two purple tags, connected clusters) detector.
-# Written before the implementation, so expected to FAIL until it exists; kept
-# out of `test` so the normal checks stay green. Once they pass, add
-# $(BUILD)/test_purple_pair to TESTS and remove this target.
+# Specification tests for the purple-only (two purple tags, connected clusters)
+# detector, written before the implementation (tests/test_purple_pair.c).
 $(BUILD)/test_purple_pair: $(call obj,tests/test_purple_pair.c src/cam_proc/posture_detect.c)
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
 
-test-purple-pair: $(BUILD)/test_purple_pair
-	./$(BUILD)/test_purple_pair
+# The detector's own built-in self-test (the -DPOSTURE_TEST block at the end of
+# src/cam_proc/posture_detect.c), built from that one file.
+$(BUILD)/test_posture_selftest: src/cam_proc/posture_detect.c src/cam_proc/posture_detect.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CSTD) $(WARN) $(CPPFLAGS) -DPOSTURE_TEST $(CFLAGS) $(EXTRA_CFLAGS) $< $(LDFLAGS) -lm -o $@
 
 asan:
 	$(MAKE) BUILD=build-asan EXTRA_CFLAGS="$(SAN)" all test

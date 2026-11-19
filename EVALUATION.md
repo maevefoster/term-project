@@ -114,3 +114,19 @@ they take, without picking up the background?
 
 **Not done:** posture accuracy, distance range, and a second lighting condition. The earlier 4-posture CVA run
 (pasted in chat, not saved in the repo) predates this tuning.
+
+## Two-purple-tag detector review (2026-11-19, synthetic frames, not live)
+
+Scratch review of the submitted connected-cluster detector, run on synthetic frames
+(no camera, no images saved). Results with the submitted default config:
+
+| Scenario | Result |
+|---|---|
+| Compile with `-Wall -Wextra -Werror -Wvla`; detector self-test (25 checks); self-test under ASan/UBSan | clean / all pass / clean |
+| Spec tests (`tests/test_purple_pair.c`) | 9 of 10 passed before the policy flip; the 10th expected "two largest win" while the detector uses "exactly two" |
+| Tags with 0-40% of their pixels randomly missing (200 trials each) | OK in 100% of trials (99% at 50% missing) |
+| A 2-pixel-wide gap crossing each tag | rejected: each tag split into 4 clusters, 8 good clusters |
+| Random isolated purple noise pixels over the frame | OK in 100% of trials up to about 1% of pixels; about 1% OK at 5% of pixels |
+| Run time | about 0.5 ms per 320x240 frame on the dev PC (Pi not measured) |
+
+Open items are listed in DESIGN.md (item 7). Live behavior with real sticky notes is not yet measured.

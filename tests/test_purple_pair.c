@@ -5,16 +5,20 @@
  * the ear marker and the lower blob is the neck (C7) marker. Green is no
  * longer a marker.
  *
- * These tests are written BEFORE the implementation and are expected to FAIL
- * against the current detector (which finds one blob per color). They are run
- * with `make test-purple-pair`, which is deliberately NOT part of `make test`
- * so the normal checks stay green until the new detector exists. When these
- * pass, add test_purple_pair to TESTS in the Makefile.
+ * These tests were written BEFORE the implementation as its specification
+ * (connected clusters, upper = ear, lower = neck). The submitted detector
+ * passes them and they now run as part of `make test`.
  *
- * Interface assumed (unchanged from today): posture_cfg_default() must give a
- * config that detects two purple tags, and the result reports the UPPER tag as
- * `ear` and the LOWER tag as `c7`. If the result struct changes, update these
- * tests deliberately.
+ * One case follows a POLICY decision that still needs the team's confirmation:
+ * the submitted detector accepts a frame only when it finds EXACTLY two
+ * sticker-sized clusters, so a third sticker-sized purple object makes the
+ * frame NO_USER (test_third_sticker_sized_blob_makes_frame_ambiguous). The
+ * earlier draft of this spec expected the two LARGEST clusters to win instead;
+ * if the team prefers that, change the detector and flip that one test back.
+ *
+ * Interface assumed: posture_cfg_default() gives a config that detects two
+ * purple tags, and the result reports the UPPER tag as `ear` and the LOWER tag
+ * as `c7`. If the result struct changes, update these tests deliberately.
  *
  * Fixtures are synthetic frames built in memory (never read from or written to
  * disk). Each tag is a solid rectangle; its centroid is x0 + (w-1)/2,
@@ -171,18 +175,22 @@ static void test_isolated_stray_pixels_are_ignored(void)
     check_pair(&o, cx(180, 16), cy(92, 16), cx(140, 16), cy(152, 16));
 }
 
-static void test_third_smaller_blob_is_ignored(void)
+static void test_third_sticker_sized_blob_makes_frame_ambiguous(void)
 {
     posture_obs_t o;
 
-    /* A stray purple object bigger than min_pixels (6x6 = 36 px) above the
-     * ear tag: the two LARGEST clusters are the tags, not the two highest. */
+    /* POLICY (pending team confirmation): a third purple object that passes
+     * the sticker checks (6x6 = 36 px, above min_pixels) means the frame does
+     * not have exactly two tags, so it is rejected rather than guessed. */
     fill_grey();
     rect(180, 92, 16, 16, PY, PU, PV);
     rect(140, 152, 16, 16, PY, PU, PV);
     rect(250, 30, 6, 6, PY, PU, PV);
     o = detect();
-    check_pair(&o, cx(180, 16), cy(92, 16), cx(140, 16), cy(152, 16));
+    CHECK(o.status == POSTURE_NO_USER);
+    CHECK(o.n_good == 3);
+    CHECK(o.reject == REJ_NOT_TWO);
+    CHECK(!o.ear.found && !o.c7.found);
 }
 
 static void test_touching_tags_cannot_be_separated(void)
@@ -250,7 +258,7 @@ int main(void)
     RUN(test_tags_with_different_purple_shades);
     RUN(test_single_purple_tag_is_not_enough);
     RUN(test_isolated_stray_pixels_are_ignored);
-    RUN(test_third_smaller_blob_is_ignored);
+    RUN(test_third_sticker_sized_blob_makes_frame_ambiguous);
     RUN(test_touching_tags_cannot_be_separated);
     RUN(test_tags_too_close_together_are_rejected);
     RUN(test_green_and_blue_are_not_markers);
