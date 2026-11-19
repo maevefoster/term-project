@@ -25,10 +25,13 @@ void posture_cfg_default(posture_cfg_t *c)
     /* Green and purple are far from skin hue (~0-25 deg), so neither should
      * match the face or neck. Use neon/fluorescent stickers so saturation
      * stays high in dim or warm light.
-     * PROVISIONAL: the purple range is not yet measured on our sticky note.
-     * Measure with `make camdebug` (click the note) and adjust. */
-    c->ear = (hsv_range_t){ 90.f, 165.f, 0.50f, 0.25f };   /* neon green */
-    c->c7  = (hsv_range_t){ 260.f, 310.f, 0.50f, 0.20f };  /* purple     */
+     * Ranges were tuned live with our sticky notes (DESIGN.md, item 6): the
+     * notes read hue 156-171 (green) and 253-303 (purple) depending on angle
+     * and light. A brightness minimum of 0.40 on purple keeps dark, noisy
+     * pixels out; lowering brightness minimums let background noise in.
+     * Re-measure with `make camdebug` if the notes or lighting change. */
+    c->ear = (hsv_range_t){ 90.f, 172.f, 0.50f, 0.25f };   /* green  */
+    c->c7  = (hsv_range_t){ 250.f, 310.f, 0.38f, 0.40f };  /* purple */
     c->min_pixels   = 12;
     c->good_pixels  = 60;
     c->max_sigma_px = 12.f;
