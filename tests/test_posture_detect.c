@@ -27,6 +27,14 @@ static const uint8_t GY = 145, GU = 54, GV = 34;    /* green (ear) */
 static const uint8_t PY = 74, PU = 221, PV = 166;   /* purple (C7) */
 static const uint8_t BLY = 41, BLU = 240, BLV = 110; /* blue: no longer a marker */
 
+/* Edge-of-range fixtures (BT.601 limited range), computed from the RGB values:
+ *   purple at hue ~255:  RGB (64,0,255)  -> inside the 250-310 hue range
+ *   dark purple, V~0.30: RGB (38,0,77)   -> below the 0.40 brightness minimum
+ *   green at hue ~170:   RGB (0,255,212) -> inside the 90-172 hue range */
+static const uint8_t PLY = 57, PLU = 230, PLV = 138;   /* purple, hue ~255 */
+static const uint8_t DPY = 33, DPU = 156, DPV = 139;   /* dark purple      */
+static const uint8_t TGY = 165, TGU = 147, TGV = 19;   /* teal-green ~170  */
+
 static uint8_t g_frame[(W * 2 + PAD) * H]; /* large; keep off the stack */
 
 static void fill_grey(uint8_t *f, size_t stride)
@@ -145,6 +153,58 @@ static void test_blue_is_not_c7(void)
     CHECK(o.ear.found && !o.c7.found);
 }
 
+static void test_purple_low_hue_accepted(void)
+{
+    posture_cfg_t cfg;
+    posture_obs_t o;
+
+    /* Our purple note reads hue 253-265 when it faces the camera. */
+    posture_cfg_default(&cfg);
+    fill_grey(g_frame, W * 2);
+    square(g_frame, W * 2, 190, 100, GY, GU, GV);
+    square(g_frame, W * 2, 150, 160, PLY, PLU, PLV);
+
+    CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
+    CHECK(o.status == POSTURE_OK);
+    CHECK(o.c7.found);
+    CHECK(fabsf(o.cva_deg - EXPECT_CVA) < 0.5f);
+}
+
+static void test_dark_purple_rejected(void)
+{
+    posture_cfg_t cfg;
+    posture_obs_t o;
+
+    /* Dark, noisy pixels must not count as C7: the purple brightness
+     * minimum is 0.40, and a very dark purple patch (V~0.30) is below it. */
+    posture_cfg_default(&cfg);
+    fill_grey(g_frame, W * 2);
+    square(g_frame, W * 2, 190, 100, GY, GU, GV);
+    square(g_frame, W * 2, 150, 160, DPY, DPU, DPV);
+
+    CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
+    CHECK(o.status == POSTURE_NO_USER);
+    CHECK(!o.c7.found);
+}
+
+static void test_green_high_hue_accepted(void)
+{
+    posture_cfg_t cfg;
+    posture_obs_t o;
+
+    /* Our green note read hue up to 171 at some angles; the ear range
+     * now reaches 172. */
+    posture_cfg_default(&cfg);
+    fill_grey(g_frame, W * 2);
+    square(g_frame, W * 2, 190, 100, TGY, TGU, TGV);
+    square(g_frame, W * 2, 150, 160, PY, PU, PV);
+
+    CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
+    CHECK(o.status == POSTURE_OK);
+    CHECK(o.ear.found);
+    CHECK(fabsf(o.cva_deg - EXPECT_CVA) < 0.5f);
+}
+
 static void test_bad_args(void)
 {
     posture_cfg_t cfg;
@@ -198,6 +258,9 @@ int main(void)
     test_one_marker();
     test_ear_below_c7();
     test_blue_is_not_c7();
+    test_purple_low_hue_accepted();
+    test_dark_purple_rejected();
+    test_green_high_hue_accepted();
     test_bad_args();
     test_markers_seam();
 
