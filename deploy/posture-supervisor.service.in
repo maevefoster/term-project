@@ -1,0 +1,42 @@
+# posture-coach supervisor (Step 2, mechanism E).
+# Template: `sudo make install` fills in @USER@ and @LIBDIR@ and writes the
+# result to /etc/systemd/system/posture-supervisor.service.
+# systemd only allows comments on their own lines, never after a value.
+
+[Unit]
+Description=posture-coach supervisor (hub, imu_proc, cam_proc)
+After=local-fs.target
+# Never give up restarting; the supervisor's own backoff prevents restart
+# storms of its children.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+# /dev/i2c-1 (IMU) and /dev/video0 (camera).
+SupplementaryGroups=i2c video
+ExecStart=@LIBDIR@/supervisor --run-dir /run/posture --log /var/lib/posture/posture.log
+WorkingDirectory=/var/lib/posture
+# Creates /run/posture (sockets) and /var/lib/posture (log), owned by @USER@.
+RuntimeDirectory=posture
+RuntimeDirectoryMode=0750
+StateDirectory=posture
+StateDirectoryMode=0750
+Restart=always
+RestartSec=1
+# SIGTERM goes to the supervisor only, so it stops its children in its own
+# order (their *_STOP records reach the log); anything left is SIGKILLed.
+KillMode=mixed
+# Longer than the supervisor's own 3 s stop grace period.
+TimeoutStopSec=10
+
+# Hardening. The product is offline: only Unix sockets, no IP traffic.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

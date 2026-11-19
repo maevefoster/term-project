@@ -9,6 +9,8 @@
 #   make camdebug        build build/cam_debug, the live marker debug viewer (Pi desktop, SDL2)
 #   make boundarycheck   grep src/ for network, model and image-writing APIs
 #   make deploy PI=pi@<host>
+#   sudo make install    copy built binaries to $(LIBDIR) and install the systemd unit (Pi)
+#   sudo make uninstall  stop/disable the service, remove unit and binaries (keeps logs)
 
 CC       ?= cc
 CSTD     := -std=c17
@@ -34,9 +36,16 @@ TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_postu
               $(BUILD)/test_mpu6050 $(BUILD)/test_msg $(BUILD)/test_hub_state $(BUILD)/test_ipc \
               $(BUILD)/test_sup_policy $(BUILD)/test_heartbeat
 
+LIBDIR       ?= /usr/local/lib/posture-coach
+UNIT_DIR     ?= /etc/systemd/system
+UNIT         := posture-supervisor.service
+SERVICE_USER ?= $(SUDO_USER)
+BINS         := supervisor hub imu_proc cam_proc
+
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
-.PHONY: all test asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean
+.PHONY: all test asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean \
+        install uninstall
 
 all: $(BUILD)/supervisor $(BUILD)/hub $(BUILD)/cam_proc $(BUILD)/imu_proc
 
@@ -120,6 +129,33 @@ ifndef PI
 	$(error usage: make deploy PI=pi@<host>)
 endif
 	rsync -az --delete --exclude .git --exclude 'build*' --exclude 'posture.log*' --exclude 'imu.log*' ./ $(PI):posture-coach/
+
+# Installs what `make` already built; it never builds as root (that would
+# leave root-owned files in build/). The service runs as SERVICE_USER: the
+# user who ran sudo, unless set explicitly.
+install:
+	@test "$$(id -u)" -eq 0 || { echo "install: run as root: sudo make install"; exit 1; }
+	@test -n "$(SERVICE_USER)" && test "$(SERVICE_USER)" != root || \
+		{ echo "install: set SERVICE_USER=<pi user> (not root)"; exit 1; }
+	@for b in $(BINS); do test -x $(BUILD)/$$b || \
+		{ echo "install: $(BUILD)/$$b missing; run make (not as root) first"; exit 1; }; done
+	install -d -m 755 $(LIBDIR)
+	install -m 755 $(addprefix $(BUILD)/,$(BINS)) $(LIBDIR)/
+	sed -e 's|@USER@|$(SERVICE_USER)|g' -e 's|@LIBDIR@|$(LIBDIR)|g' \
+		deploy/$(UNIT).in > $(UNIT_DIR)/$(UNIT)
+	chmod 644 $(UNIT_DIR)/$(UNIT)
+	systemctl daemon-reload
+	@echo "installed for user $(SERVICE_USER)."
+	@echo "start now and at boot: sudo systemctl enable --now posture-supervisor"
+	@echo "after an update:       sudo systemctl restart posture-supervisor"
+
+# Leaves /var/lib/posture (the log) in place.
+uninstall:
+	@test "$$(id -u)" -eq 0 || { echo "uninstall: run as root: sudo make uninstall"; exit 1; }
+	-systemctl disable --now $(UNIT)
+	rm -f $(UNIT_DIR)/$(UNIT)
+	rm -rf $(LIBDIR)
+	systemctl daemon-reload
 
 soakcheck jitterbench:
 	@echo "$@: not implemented in M3"; exit 1

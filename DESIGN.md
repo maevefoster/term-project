@@ -123,7 +123,7 @@ This section was written while our MPU-6050 boards were defective, so it covers 
 |---|---|---|---|
 | 1 | ~~`cam_proc` writes the application log itself~~ **Reverted in Step 1:** hub writes the log | Only `hub` persists application logs | done |
 | 2 | ~~No supervisor~~ **Reverted in Step 2:** `build/supervisor` starts and restarts all processes (systemd unit still to come) | supervisor + Unix domain sockets | done |
-| 3 | Log is `./posture.log` in the working directory (`--log PATH` overrides) | `/var/lib/posture/` | systemd deployment |
+| 3 | Log is `./posture.log` in the working directory (`--log PATH` overrides). **Under systemd (Step 2) it is `/var/lib/posture/posture.log`**; runs started by hand still use `./posture.log` | `/var/lib/posture/` | done for the service |
 | 4 | Marker detection (`posture_detect.c`, student-written) runs on every good frame but does not accept markers live yet (EVALUATION.md, 2026-11-05) | HSV markers, centroids, CVA | markers are accepted live |
 
 ### Camera capture
@@ -233,7 +233,7 @@ Hub's event timestamps are when hub wrote them; the sender's own time is in the 
 
 ## Step 2: supervisor and heartbeats (mechanism E)
 
-`build/supervisor` starts `hub`, then `imu_proc` and `cam_proc` 0.5 s later (from its own directory, or `--bin-dir`), and passes `--run-dir` to all of them and `--log` to hub. The systemd unit (`Restart=always`) is still to come; until then the supervisor is started by hand.
+`build/supervisor` starts `hub`, then `imu_proc` and `cam_proc` 0.5 s later (from its own directory, or `--bin-dir`), and passes `--run-dir` to all of them and `--log` to hub. systemd keeps the supervisor itself running (see "Running under systemd" below); it can also be started by hand.
 
 ### Starting children
 - `fork`/`exec`. Before `exec` the child resets its signal mask (the supervisor blocks signals for its `signalfd`, and a blocked mask survives `exec`), resets SIGPIPE, sets `PR_SET_PDEATHSIG(SIGTERM)` so it dies with the supervisor, and gets the write end of a heartbeat pipe on fd 3 with `POSTURE_HEARTBEAT_FD=3`. Every other supervisor fd is close-on-exec.
@@ -254,3 +254,13 @@ SIGTERM or SIGINT → SIGTERM to all children, `SIGKILL` to any still running af
 - Every body starts with `mono=<s.ns>`, the supervisor's `CLOCK_MONOTONIC` time when it happened, so kill-trial timings stay exact even when the record is written later.
 - Sent to hub on a third socket, `<run_dir>/sup.sock` (`MSG_SRC_SUP`, EVENTs only; data messages are rejected), and logged as `supervisor SUP_...`. While hub is down they wait in a queue of 32 (oldest dropped and counted) and are sent once hub is back, so a hub crash and its restart still reach the log. Every event is also printed to the supervisor's stderr.
 - `HUB_SUMMARY` adds `sup=connected|disconnected sup_msgs= sup_rejects=`.
+
+### Running under systemd
+- Unit template: `deploy/posture-supervisor.service.in`. `sudo make install` copies the four binaries `make` already built to `/usr/local/lib/posture-coach/`, fills in the service user (the user who ran sudo, or `SERVICE_USER=`) and writes `/etc/systemd/system/posture-supervisor.service`. It does not build as root, enable or start anything. `sudo make uninstall` removes the unit and binaries and keeps the log.
+- Installed copies rather than `build/`, so rebuilding while the service runs doesn't swap binaries under it, and because `ProtectHome=yes` hides home directories.
+- Start now and at boot: `sudo systemctl enable --now posture-supervisor` (the 48-hour soak needs it at boot). After an update: `make && sudo make install && sudo systemctl restart posture-supervisor`. Diagnostics: `journalctl -u posture-supervisor` (stderr of all four processes); application log: `/var/lib/posture/posture.log`.
+- `Restart=always`, `RestartSec=1`, `StartLimitIntervalSec=0` (systemd never gives up; the supervisor's own backoff prevents restart storms of the children).
+- `RuntimeDirectory=posture` creates `/run/posture` for the sockets; `StateDirectory=posture` creates `/var/lib/posture` for the log; both owned by the service user, mode 0750. `SupplementaryGroups=i2c video` for `/dev/i2c-1` and `/dev/video0`.
+- `KillMode=mixed`: `systemctl stop` sends SIGTERM to the supervisor only, which stops the children in its own way (3 s grace) so their `*_STOP` records reach the log; systemd SIGKILLs anything left after `TimeoutStopSec=10`. If the supervisor itself dies, its children get SIGTERM through `PR_SET_PDEATHSIG` and systemd restarts the whole set after 1 s.
+- Hardening: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and `RestrictAddressFamilies=AF_UNIX` + `IPAddressDeny=any`, which make the offline requirement enforced rather than just followed.
+- Still to add with mechanism C (Step 3): a real-time priority limit (`LimitRTPRIO=`) so `imu_proc` can use `SCHED_FIFO` under the service.
