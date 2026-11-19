@@ -2,10 +2,11 @@
  * imu_proc and cam_proc, decides once per second which sensors are usable,
  * and is the only process that writes the application log.
  *
- * One SOCK_SEQPACKET listening socket per source (<run_dir>/imu.sock and
- * cam.sock); the socket a message arrives on identifies its sender. A new
- * connection from a source replaces the old one, so a restarted sensor
- * process simply reconnects. Posture decisions (fusion) come later.
+ * One SOCK_SEQPACKET listening socket per source (<run_dir>/imu.sock,
+ * cam.sock, and sup.sock for the supervisor's EVENTs); the socket a message
+ * arrives on identifies its sender. A new connection from a source replaces
+ * the old one, so a restarted process simply reconnects. Posture decisions
+ * (fusion) come later.
  */
 #define _GNU_SOURCE /* accept4 */
 #include <errno.h>
@@ -35,6 +36,7 @@
 #define HUB_HEALTH_S     3600 /* design: hourly heartbeat */
 #define HUB_MAX_EVENTS   8
 #define HUB_RECV_BATCH   64   /* messages per wakeup per client, so one can't starve the rest */
+#define HUB_NLINKS       3    /* imu, cam, supervisor; indexed by enum msg_source */
 
 enum {
     TAG_LISTEN = 0x100, /* | link index */
@@ -63,7 +65,7 @@ struct hub {
     struct applog log;
     struct heartbeat hb;
     int epfd, tfd, sfd;
-    struct hub_link links[2];
+    struct hub_link links[HUB_NLINKS];
     enum hub_mode mode;
     uint64_t mode_changes;
 };
@@ -235,6 +237,7 @@ static void on_tick(struct hub *h, int64_t now, int64_t start, int64_t *next_sum
 {
     struct hub_link *imu = &h->links[MSG_SRC_IMU];
     struct hub_link *cam = &h->links[MSG_SRC_CAM];
+    struct hub_link *sup = &h->links[MSG_SRC_SUP];
     enum hub_mode m = hub_mode_eval(hub_source_fresh(&imu->st, now),
                                     hub_source_fresh(&cam->st, now));
 
@@ -250,12 +253,15 @@ static void on_tick(struct hub *h, int64_t now, int64_t start, int64_t *next_sum
     if (now >= *next_summary) {
         applog_write(&h->log, "HUB_SUMMARY",
                      "mode=%s imu=%s imu_msgs=%llu imu_rejects=%llu imu_gaps=%llu "
-                     "cam=%s cam_msgs=%llu cam_rejects=%llu cam_gaps=%llu",
+                     "cam=%s cam_msgs=%llu cam_rejects=%llu cam_gaps=%llu "
+                     "sup=%s sup_msgs=%llu sup_rejects=%llu",
                      hub_mode_name(h->mode), hub_source_why(&imu->st, now),
                      (unsigned long long)imu->st.msgs, (unsigned long long)imu->st.rejects,
                      (unsigned long long)imu->st.seq_gaps, hub_source_why(&cam->st, now),
                      (unsigned long long)cam->st.msgs, (unsigned long long)cam->st.rejects,
-                     (unsigned long long)cam->st.seq_gaps);
+                     (unsigned long long)cam->st.seq_gaps,
+                     sup->fd >= 0 ? "connected" : "disconnected",
+                     (unsigned long long)sup->st.msgs, (unsigned long long)sup->st.rejects);
         *next_summary += HUB_SUMMARY_S * NS_PER_S;
         if (*next_summary <= now)
             *next_summary = now + HUB_SUMMARY_S * NS_PER_S;
@@ -300,7 +306,7 @@ static int setup_timer_and_signals(struct hub *h)
 
 static void close_all(struct hub *h)
 {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < HUB_NLINKS; i++) {
         struct hub_link *l = &h->links[i];
 
         if (l->fd >= 0)
@@ -353,6 +359,11 @@ int main(int argc, char **argv)
     h.links[MSG_SRC_CAM] = (struct hub_link){ .sock_name = "cam.sock", .proc = "cam_proc",
                                               .label = "cam", .src = MSG_SRC_CAM,
                                               .listen_fd = -1, .fd = -1 };
+    /* Supervisor: EVENTs only (msg_validate rejects data types here). Its
+     * events carry their own mono= time, since they may arrive queued. */
+    h.links[MSG_SRC_SUP] = (struct hub_link){ .sock_name = "sup.sock", .proc = "supervisor",
+                                              .label = "sup", .src = MSG_SRC_SUP,
+                                              .listen_fd = -1, .fd = -1 };
 
     while ((opt = getopt_long(argc, argv, "r:l:h", opts, NULL)) != -1) {
         switch (opt) {
@@ -390,7 +401,7 @@ int main(int argc, char **argv)
         exit_code = 1;
         goto out;
     }
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < HUB_NLINKS; i++) {
         struct hub_link *l = &h.links[i];
 
         if (listen_on(l, run_dir) < 0 ||

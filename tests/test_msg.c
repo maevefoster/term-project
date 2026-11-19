@@ -78,6 +78,7 @@ static void test_imu(void)
     EXPECT(&m, sizeof m, MSG_SRC_IMU, NULL);
 
     EXPECT(&m, sizeof m, MSG_SRC_CAM, "type");       /* wrong socket */
+    EXPECT(&m, sizeof m, MSG_SRC_SUP, "type");       /* supervisor sends events only */
     EXPECT(&m, sizeof m - 1, MSG_SRC_IMU, "length");
     EXPECT(&m, sizeof m.h - 1, MSG_SRC_IMU, "short");
 
@@ -106,6 +107,7 @@ static void test_cam(void)
 
     EXPECT(&m, sizeof m, MSG_SRC_CAM, NULL);
     EXPECT(&m, sizeof m, MSG_SRC_IMU, "type");
+    EXPECT(&m, sizeof m, MSG_SRC_SUP, "type");
 
     m = cam(SENSOR_OK);
     m.cva_valid = 1;
@@ -135,6 +137,7 @@ static void test_event(void)
 
     EXPECT(&m, sizeof m, MSG_SRC_IMU, NULL);
     EXPECT(&m, sizeof m, MSG_SRC_CAM, NULL);         /* events come from anyone */
+    EXPECT(&m, sizeof m, MSG_SRC_SUP, NULL);
 
     m = event("", "x=1");
     EXPECT(&m, sizeof m, MSG_SRC_IMU, "event_name");

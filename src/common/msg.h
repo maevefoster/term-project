@@ -41,6 +41,7 @@ enum msg_type {
 enum msg_source {
     MSG_SRC_IMU = 0,
     MSG_SRC_CAM = 1,
+    MSG_SRC_SUP = 2, /* supervisor: EVENTs only */
 };
 
 #define MSG_EVENT_NAME_MAX 32  /* including NUL */

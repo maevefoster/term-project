@@ -122,7 +122,7 @@ This section was written while our MPU-6050 boards were defective, so it covers 
 | # | Deviation | M2 design | Reverts when |
 |---|---|---|---|
 | 1 | ~~`cam_proc` writes the application log itself~~ **Reverted in Step 1:** hub writes the log | Only `hub` persists application logs | done |
-| 2 | No supervisor. `cam_proc` is started by hand (hub and IPC exist since Step 1) | supervisor + Unix domain sockets | Step 2 |
+| 2 | ~~No supervisor~~ **Reverted in Step 2:** `build/supervisor` starts and restarts all processes (systemd unit still to come) | supervisor + Unix domain sockets | done |
 | 3 | Log is `./posture.log` in the working directory (`--log PATH` overrides) | `/var/lib/posture/` | systemd deployment |
 | 4 | Marker detection (`posture_detect.c`, student-written) runs on every good frame but does not accept markers live yet (EVALUATION.md, 2026-11-05) | HSV markers, centroids, CVA | markers are accepted live |
 
@@ -230,3 +230,27 @@ hub writes `posture.log` (`--log` overrides) with `applog.c`. Sensor events keep
 - `HUB_REJECT` as above.
 
 Hub's event timestamps are when hub wrote them; the sender's own time is in the message header but is not logged.
+
+## Step 2: supervisor and heartbeats (mechanism E)
+
+`build/supervisor` starts `hub`, then `imu_proc` and `cam_proc` 0.5 s later (from its own directory, or `--bin-dir`), and passes `--run-dir` to all of them and `--log` to hub. The systemd unit (`Restart=always`) is still to come; until then the supervisor is started by hand.
+
+### Starting children
+- `fork`/`exec`. Before `exec` the child resets its signal mask (the supervisor blocks signals for its `signalfd`, and a blocked mask survives `exec`), resets SIGPIPE, sets `PR_SET_PDEATHSIG(SIGTERM)` so it dies with the supervisor, and gets the write end of a heartbeat pipe on fd 3 with `POSTURE_HEARTBEAT_FD=3`. Every other supervisor fd is close-on-exec.
+- A restarted supervisor starts fresh children; it never adopts old ones (they died with the old supervisor).
+
+### Crash and hang handling
+- Crash: `SIGCHLD` (via `signalfd`) → `waitpid(WNOHANG)` → `SUP_CHILD_EXIT` with exit code or signal → restart after a backoff.
+- Hang: children write one heartbeat byte about once a second (`src/common/heartbeat.c`) from their main loop: imu_proc after each tick's I2C work, cam_proc after each open/dequeue (each bounded by 1 s), hub on its 1 Hz timer. No first heartbeat within **5 s** of start (team rule, CLAUDE.md) or more than **3 s** between heartbeats (M2 design) → `SIGKILL` (`SUP_WATCHDOG`) → reaped and restarted. Checked every 100 ms.
+- A sensor that is alive and ABSENT keeps looping and beating, so it is not restarted.
+- Backoff: 1 s, doubling to 30 s for repeated quick failures (M2 design). A child that ran at least **60 s** before failing is back to 1 s (team decision). No give-up limit.
+- `--no-watchdog` turns hang detection off. Programs started without the supervisor have no `POSTURE_HEARTBEAT_FD` and don't send heartbeats; `*_START` records show `heartbeat=on|off`.
+
+### Stopping
+SIGTERM or SIGINT → SIGTERM to all children, `SIGKILL` to any still running after **3 s** (team decision), exit once all are reaped. No orphans.
+
+### Supervisor events
+- `SUP_START`, `SUP_CHILD_START`, `SUP_CHILD_EXIT` (exit or signal, `cause=exit|watchdog|stop`, run time), `SUP_RESTART` (restart number, delay, consecutive failures), `SUP_WATCHDOG` (silence, whether a first heartbeat ever came), `SUP_STOPPING`, `SUP_STOP_KILL`, `SUP_STOP`, `SUP_ERROR`.
+- Every body starts with `mono=<s.ns>`, the supervisor's `CLOCK_MONOTONIC` time when it happened, so kill-trial timings stay exact even when the record is written later.
+- Sent to hub on a third socket, `<run_dir>/sup.sock` (`MSG_SRC_SUP`, EVENTs only; data messages are rejected), and logged as `supervisor SUP_...`. While hub is down they wait in a queue of 32 (oldest dropped and counted) and are sent once hub is back, so a hub crash and its restart still reach the log. Every event is also printed to the supervisor's stderr.
+- `HUB_SUMMARY` adds `sup=connected|disconnected sup_msgs= sup_rejects=`.
