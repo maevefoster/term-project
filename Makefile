@@ -1,6 +1,6 @@
 # posture-coach build (Linux / Raspberry Pi OS).
 #
-#   make                 build build/hub, build/cam_proc and build/imu_proc
+#   make                 build build/supervisor, build/hub, build/cam_proc and build/imu_proc
 #   make test            build and run host unit tests
 #   make asan            rebuild everything with ASan+UBSan and run the tests
 #   make memcheck        run the unit tests under valgrind
@@ -14,7 +14,7 @@ CC       ?= cc
 CSTD     := -std=c17
 WARN     := -Wall -Wextra -Werror -Wvla
 CPPFLAGS := -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc/common -Isrc/cam_proc -Isrc/imu_proc \
-            -Isrc/hub
+            -Isrc/hub -Isrc/supervisor
 CFLAGS   ?= -O2 -g
 SAN      := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 
@@ -28,18 +28,26 @@ CAM_SRC    := src/cam_proc/main.c src/cam_proc/v4l2_cap.c src/cam_proc/frame_sta
               src/cam_proc/markers.c src/cam_proc/posture_detect.c
 IMU_SRC    := src/imu_proc/main.c src/imu_proc/mpu6050.c
 HUB_SRC    := src/hub/main.c src/hub/hub_state.c src/common/msg.c
+SUP_SRC    := src/supervisor/main.c src/supervisor/sup_policy.c
 TESTS      := $(BUILD)/test_applog $(BUILD)/test_frame_stats $(BUILD)/test_posture_detect \
-              $(BUILD)/test_mpu6050 $(BUILD)/test_msg $(BUILD)/test_hub_state $(BUILD)/test_ipc
+              $(BUILD)/test_mpu6050 $(BUILD)/test_msg $(BUILD)/test_hub_state $(BUILD)/test_ipc \
+              $(BUILD)/test_sup_policy
 
 obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
 .PHONY: all test asan memcheck memcheck-cam camdebug boundarycheck deploy soakcheck jitterbench clean
 
-all: $(BUILD)/hub $(BUILD)/cam_proc $(BUILD)/imu_proc
+all: $(BUILD)/supervisor $(BUILD)/hub $(BUILD)/cam_proc $(BUILD)/imu_proc
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CSTD) $(WARN) $(CPPFLAGS) $(CFLAGS) $(EXTRA_CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/supervisor: $(call obj,$(SUP_SRC) $(IPC_SRC))
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@
+
+$(BUILD)/test_sup_policy: $(call obj,tests/test_sup_policy.c src/supervisor/sup_policy.c)
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -o $@
 
 $(BUILD)/hub: $(call obj,$(HUB_SRC) $(COMMON_SRC))
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $^ $(LDFLAGS) -lm -o $@

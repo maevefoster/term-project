@@ -30,6 +30,11 @@ struct ipc_client {
 int ipc_client_init(struct ipc_client *cl, const char *run_dir, const char *sock_name,
                     const char *proc);
 
+/* Connects if needed (at most one attempt per second) and returns 1 if
+ * connected. Lets a sender that keeps its own queue (the supervisor) hold
+ * messages back instead of spending a seq on a send that would be dropped. */
+int ipc_client_ready(struct ipc_client *cl);
+
 /* Sets msg->seq and sends `len` bytes. Returns 0 if sent, -1 if dropped. */
 int ipc_send(struct ipc_client *cl, struct msg_hdr *msg, size_t len);
 

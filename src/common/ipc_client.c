@@ -67,6 +67,13 @@ static void try_connect(struct ipc_client *cl, int64_t now)
     cl->connected_once = 1;
 }
 
+int ipc_client_ready(struct ipc_client *cl)
+{
+    if (cl->fd < 0)
+        try_connect(cl, mono_ns());
+    return cl->fd >= 0;
+}
+
 int ipc_send(struct ipc_client *cl, struct msg_hdr *msg, size_t len)
 {
     msg->seq = cl->seq++;
