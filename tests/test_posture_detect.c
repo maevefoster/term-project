@@ -9,10 +9,8 @@
  *     so "ear below C7" can no longer happen (see test_upper_tag_is_ear).
  *   - test_green_high_hue_accepted is gone: green is no longer a marker (see
  *     test_green_and_blue_are_not_markers).
- *   - test_dark_purple_rejected now uses a much darker patch (V~0.16). A
- *     patch at V~0.30 is only rejected if the purple brightness minimum is the
- *     tuned 0.40; the submitted default is 0.25, so that edge is a pending
- *     team decision (DESIGN.md, item 6).
+ *   - the very-dark-purple test uses V~0.16, and test_dim_purple_rejected
+ *     (V~0.30) covers the tuned brightness minimum of 0.40 (DESIGN.md, item 7).
  * Detailed two-tag behavior is specified in tests/test_purple_pair.c. */
 #include <math.h>
 #include <stdio.h>
@@ -46,6 +44,8 @@ static const uint8_t BLY = 41, BLU = 240, BLV = 110; /* blue: not a marker */
  *   very dark purple:     RGB (20,0,41)  -> V~0.16, below any brightness minimum we use */
 static const uint8_t PLY = 57, PLU = 230, PLV = 138;   /* purple, hue ~255 */
 static const uint8_t DPY = 25, DPU = 143, DPV = 134;   /* very dark purple */
+/* Dim purple, RGB (38,0,77): V~0.30, below the tuned 0.40 brightness minimum. */
+static const uint8_t DMY = 33, DMU = 156, DMV = 139;
 
 static uint8_t g_frame[(W * 2 + PAD) * H]; /* large; keep off the stack */
 
@@ -203,6 +203,22 @@ static void test_very_dark_purple_rejected(void)
     CHECK(o.status == POSTURE_NO_USER);
 }
 
+static void test_dim_purple_rejected(void)
+{
+    posture_cfg_t cfg;
+    posture_obs_t o;
+
+    /* Tuned live: lowering the brightness minimum let dark noise pixels in, so
+     * the default minimum is 0.40 and a dim purple patch (V~0.30) is not a tag. */
+    posture_cfg_default(&cfg);
+    fill_grey(g_frame, W * 2);
+    square(g_frame, W * 2, 190, 100, PY, PU, PV);
+    square(g_frame, W * 2, 150, 160, DMY, DMU, DMV);
+
+    CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
+    CHECK(o.status == POSTURE_NO_USER);
+}
+
 static void test_bad_args(void)
 {
     posture_cfg_t cfg;
@@ -258,6 +274,7 @@ int main(void)
     test_green_and_blue_are_not_markers();
     test_purple_low_hue_accepted();
     test_very_dark_purple_rejected();
+    test_dim_purple_rejected();
     test_bad_args();
     test_markers_seam();
 

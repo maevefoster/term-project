@@ -47,9 +47,12 @@ void posture_cfg_default(posture_cfg_t *c)
 {
     /* Purple, widened a little toward blue-violet because webcams often render
      * purple a bit bluish. Tune with cam_debug (click a sticker, read H/S/V).
-     * Keep the saturation floor above what gray/skin noise reaches. */
-    c->marker = (hsv_range_t){ 250.f, 320.f, 0.30f, 0.25f };
-    c->min_pixels   = 12;
+     * Values tuned live with our sticky-note tags (DESIGN.md, items 6 and 7):
+     * the brightness minimum 0.40 keeps dark, noisy pixels out, and
+     * min_pixels 30 keeps tiny fragments from being taken as a tag (our tags
+     * are about 100-150 pixels). */
+    c->marker = (hsv_range_t){ 250.f, 310.f, 0.38f, 0.40f };
+    c->min_pixels   = 30;
     c->good_pixels  = 60;
     c->max_sigma_px = 12.f;
     c->min_fill     = 0.45f;

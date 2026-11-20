@@ -175,6 +175,23 @@ static void test_isolated_stray_pixels_are_ignored(void)
     check_pair(&o, cx(180, 16), cy(92, 16), cx(140, 16), cy(152, 16));
 }
 
+static void test_tiny_fragment_is_not_a_tag(void)
+{
+    posture_obs_t o;
+
+    /* Live runs showed a 12-25 pixel fragment being accepted as a tag when
+     * the real tag was rejected, giving a wrong CVA reported as OK. With one
+     * real tag and a 6x4 = 24 pixel fragment (below min_pixels = 30), the
+     * fragment must not count as the second tag. */
+    fill_grey();
+    rect(140, 152, 16, 16, PY, PU, PV);
+    rect(180, 92, 6, 4, PY, PU, PV);
+    o = detect();
+    CHECK(o.status == POSTURE_NO_USER);
+    CHECK(o.n_good == 1);
+    CHECK(!o.ear.found && !o.c7.found);
+}
+
 static void test_third_sticker_sized_blob_makes_frame_ambiguous(void)
 {
     posture_obs_t o;
@@ -258,6 +275,7 @@ int main(void)
     RUN(test_tags_with_different_purple_shades);
     RUN(test_single_purple_tag_is_not_enough);
     RUN(test_isolated_stray_pixels_are_ignored);
+    RUN(test_tiny_fragment_is_not_a_tag);
     RUN(test_third_sticker_sized_blob_makes_frame_ambiguous);
     RUN(test_touching_tags_cannot_be_separated);
     RUN(test_tags_too_close_together_are_rejected);
