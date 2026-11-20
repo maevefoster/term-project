@@ -1,6 +1,17 @@
 /* Host unit tests for src/cam_proc/posture_detect.c and the markers.c seam.
  * Synthetic frames only (built in memory, never read from or written to
- * disk); colors and geometry match the original POSTURE_TEST self-test. */
+ * disk).
+ *
+ * Design: BOTH tags are purple; the upper cluster is the ear tag and the lower
+ * one the neck (C7) tag. These tests were ported from the earlier green-ear /
+ * purple-neck design with the same geometry and checks. Deliberate changes:
+ *   - test_ear_below_c7 is gone: the ear tag is the upper tag by definition,
+ *     so "ear below C7" can no longer happen (see test_upper_tag_is_ear).
+ *   - test_green_high_hue_accepted is gone: green is no longer a marker (see
+ *     test_green_and_blue_are_not_markers).
+ *   - the very-dark-purple test uses V~0.16, and test_dim_purple_rejected
+ *     (V~0.30) covers the tuned brightness minimum of 0.40 (DESIGN.md, item 7).
+ * Detailed two-tag behavior is specified in tests/test_purple_pair.c. */
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,19 +32,20 @@ static int failures;
 
 enum { W = 320, H = 240, PAD = 64 };
 
-/* BT.601 limited-range YUV of pure green / purple / blue.
- * Purple is RGB (128,0,255), hue 270 deg; blue is RGB (0,0,255), hue 240 deg. */
-static const uint8_t GY = 145, GU = 54, GV = 34;    /* green (ear) */
-static const uint8_t PY = 74, PU = 221, PV = 166;   /* purple (C7) */
-static const uint8_t BLY = 41, BLU = 240, BLV = 110; /* blue: no longer a marker */
+/* BT.601 limited-range YUV.
+ * Purple is RGB (128,0,255), hue 270 deg; blue is RGB (0,0,255), hue 240 deg;
+ * green is RGB (0,255,0), hue 120 deg. */
+static const uint8_t GY = 145, GU = 54, GV = 34;    /* green: not a marker */
+static const uint8_t PY = 74, PU = 221, PV = 166;   /* purple (both tags) */
+static const uint8_t BLY = 41, BLU = 240, BLV = 110; /* blue: not a marker */
 
-/* Edge-of-range fixtures (BT.601 limited range), computed from the RGB values:
- *   purple at hue ~255:  RGB (64,0,255)  -> inside the 250-310 hue range
- *   dark purple, V~0.30: RGB (38,0,77)   -> below the 0.40 brightness minimum
- *   green at hue ~170:   RGB (0,255,212) -> inside the 90-172 hue range */
+/* Edge fixtures computed from the RGB values:
+ *   purple at hue ~255:   RGB (64,0,255) -> inside the 250-320 hue range
+ *   very dark purple:     RGB (20,0,41)  -> V~0.16, below any brightness minimum we use */
 static const uint8_t PLY = 57, PLU = 230, PLV = 138;   /* purple, hue ~255 */
-static const uint8_t DPY = 33, DPU = 156, DPV = 139;   /* dark purple      */
-static const uint8_t TGY = 165, TGU = 147, TGV = 19;   /* teal-green ~170  */
+static const uint8_t DPY = 25, DPU = 143, DPV = 134;   /* very dark purple */
+/* Dim purple, RGB (38,0,77): V~0.30, below the tuned 0.40 brightness minimum. */
+static const uint8_t DMY = 33, DMU = 156, DMV = 139;
 
 static uint8_t g_frame[(W * 2 + PAD) * H]; /* large; keep off the stack */
 
@@ -67,8 +79,8 @@ static void test_upright_pair(void)
 
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, GY, GU, GV); /* ear */
-    square(g_frame, W * 2, 150, 160, PY, PU, PV); /* C7 */
+    square(g_frame, W * 2, 190, 100, PY, PU, PV); /* upper tag = ear */
+    square(g_frame, W * 2, 150, 160, PY, PU, PV); /* lower tag = neck (C7) */
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_OK);
@@ -84,15 +96,31 @@ static void test_mirrored_pair(void)
     posture_cfg_t cfg;
     posture_obs_t o;
 
-    /* Ear to the left of C7: CVA is documented as direction-agnostic. */
+    /* Ear tag to the left of the neck tag: CVA is direction-agnostic. */
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 110, 100, GY, GU, GV);
+    square(g_frame, W * 2, 110, 100, PY, PU, PV);
     square(g_frame, W * 2, 150, 160, PY, PU, PV);
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_OK);
     CHECK(fabsf(o.cva_deg - EXPECT_CVA) < 0.5f);
+}
+
+static void test_upper_tag_is_ear(void)
+{
+    posture_cfg_t cfg;
+    posture_obs_t o;
+
+    /* Labels follow position, not drawing order. */
+    posture_cfg_default(&cfg);
+    fill_grey(g_frame, W * 2);
+    square(g_frame, W * 2, 150, 160, PY, PU, PV); /* lower tag drawn first */
+    square(g_frame, W * 2, 190, 100, PY, PU, PV);
+
+    CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
+    CHECK(o.status == POSTURE_OK);
+    CHECK(o.ear.y < o.c7.y);
 }
 
 static void test_empty_frame(void)
@@ -115,42 +143,32 @@ static void test_one_marker(void)
 
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, GY, GU, GV); /* ear only */
+    square(g_frame, W * 2, 190, 100, PY, PU, PV); /* one purple tag only */
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_NO_USER);
-    CHECK(o.ear.found && !o.c7.found);
+    CHECK(!o.ear.found && !o.c7.found);
 }
 
-static void test_ear_below_c7(void)
+static void test_green_and_blue_are_not_markers(void)
 {
     posture_cfg_t cfg;
     posture_obs_t o;
 
+    /* Only purple counts: a green or blue patch next to one purple tag must
+     * not be accepted as the second marker. */
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 160, GY, GU, GV); /* ear lower than C7 */
-    square(g_frame, W * 2, 150, 100, PY, PU, PV);
-
+    square(g_frame, W * 2, 190, 100, GY, GU, GV);
+    square(g_frame, W * 2, 150, 160, PY, PU, PV);
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_NO_USER);
-}
 
-static void test_blue_is_not_c7(void)
-{
-    posture_cfg_t cfg;
-    posture_obs_t o;
-
-    /* The neck marker is purple now; a blue patch (e.g. a blue poster or
-     * object in the background) must not be picked up as C7. */
-    posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, GY, GU, GV);     /* ear (green) */
-    square(g_frame, W * 2, 150, 160, BLY, BLU, BLV);  /* blue where C7 would be */
-
+    square(g_frame, W * 2, 190, 100, BLY, BLU, BLV);
+    square(g_frame, W * 2, 150, 160, PY, PU, PV);
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_NO_USER);
-    CHECK(o.ear.found && !o.c7.found);
 }
 
 static void test_purple_low_hue_accepted(void)
@@ -161,48 +179,44 @@ static void test_purple_low_hue_accepted(void)
     /* Our purple note reads hue 253-265 when it faces the camera. */
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, GY, GU, GV);
+    square(g_frame, W * 2, 190, 100, PLY, PLU, PLV);
     square(g_frame, W * 2, 150, 160, PLY, PLU, PLV);
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_OK);
-    CHECK(o.c7.found);
+    CHECK(o.ear.found && o.c7.found);
     CHECK(fabsf(o.cva_deg - EXPECT_CVA) < 0.5f);
 }
 
-static void test_dark_purple_rejected(void)
+static void test_very_dark_purple_rejected(void)
 {
     posture_cfg_t cfg;
     posture_obs_t o;
 
-    /* Dark, noisy pixels must not count as C7: the purple brightness
-     * minimum is 0.40, and a very dark purple patch (V~0.30) is below it. */
+    /* Dark, noisy pixels must not count as a tag. */
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, GY, GU, GV);
+    square(g_frame, W * 2, 190, 100, PY, PU, PV);
     square(g_frame, W * 2, 150, 160, DPY, DPU, DPV);
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
     CHECK(o.status == POSTURE_NO_USER);
-    CHECK(!o.c7.found);
 }
 
-static void test_green_high_hue_accepted(void)
+static void test_dim_purple_rejected(void)
 {
     posture_cfg_t cfg;
     posture_obs_t o;
 
-    /* Our green note read hue up to 171 at some angles; the ear range
-     * now reaches 172. */
+    /* Tuned live: lowering the brightness minimum let dark noise pixels in, so
+     * the default minimum is 0.40 and a dim purple patch (V~0.30) is not a tag. */
     posture_cfg_default(&cfg);
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, TGY, TGU, TGV);
-    square(g_frame, W * 2, 150, 160, PY, PU, PV);
+    square(g_frame, W * 2, 190, 100, PY, PU, PV);
+    square(g_frame, W * 2, 150, 160, DMY, DMU, DMV);
 
     CHECK(posture_detect(g_frame, W, H, &cfg, &o) == 0);
-    CHECK(o.status == POSTURE_OK);
-    CHECK(o.ear.found);
-    CHECK(fabsf(o.cva_deg - EXPECT_CVA) < 0.5f);
+    CHECK(o.status == POSTURE_NO_USER);
 }
 
 static void test_bad_args(void)
@@ -228,7 +242,7 @@ static void test_markers_seam(void)
     markers_take_stats(&m); /* reset */
 
     fill_grey(g_frame, W * 2);
-    square(g_frame, W * 2, 190, 100, GY, GU, GV);
+    square(g_frame, W * 2, 190, 100, PY, PU, PV);
     square(g_frame, W * 2, 150, 160, PY, PU, PV);
     markers_on_frame(g_frame, packed, W, H, W * 2);      /* found */
     markers_on_frame(g_frame, packed - 1, W, H, W * 2);  /* short buffer */
@@ -254,13 +268,13 @@ int main(void)
 {
     test_upright_pair();
     test_mirrored_pair();
+    test_upper_tag_is_ear();
     test_empty_frame();
     test_one_marker();
-    test_ear_below_c7();
-    test_blue_is_not_c7();
+    test_green_and_blue_are_not_markers();
     test_purple_low_hue_accepted();
-    test_dark_purple_rejected();
-    test_green_high_hue_accepted();
+    test_very_dark_purple_rejected();
+    test_dim_purple_rejected();
     test_bad_args();
     test_markers_seam();
 

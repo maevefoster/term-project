@@ -114,3 +114,52 @@ they take, without picking up the background?
 
 **Not done:** posture accuracy, distance range, and a second lighting condition. The earlier 4-posture CVA run
 (pasted in chat, not saved in the repo) predates this tuning.
+
+## Two-purple-tag detector review (2026-11-19, synthetic frames, not live)
+
+Scratch review of the submitted connected-cluster detector, run on synthetic frames
+(no camera, no images saved). Results with the submitted default config:
+
+| Scenario | Result |
+|---|---|
+| Compile with `-Wall -Wextra -Werror -Wvla`; detector self-test (25 checks); self-test under ASan/UBSan | clean / all pass / clean |
+| Spec tests (`tests/test_purple_pair.c`) | 9 of 10 passed before the policy flip; the 10th expected "two largest win" while the detector uses "exactly two" |
+| Tags with 0-40% of their pixels randomly missing (200 trials each) | OK in 100% of trials (99% at 50% missing) |
+| A 2-pixel-wide gap crossing each tag | rejected: each tag split into 4 clusters, 8 good clusters |
+| Random isolated purple noise pixels over the frame | OK in 100% of trials up to about 1% of pixels; about 1% OK at 5% of pixels |
+| Run time | about 0.5 ms per 320x240 frame on the dev PC (Pi not measured) |
+
+Open items are listed in DESIGN.md (item 7). Live behavior with real sticky notes is not yet measured.
+
+## Four-posture CVA recordings with two purple tags (2026-11-20, live, camera only)
+
+Two live recordings on the Pi (`cam_debug` output with timestamps and `LABEL` lines; numbers only, no images).
+Defaults at the time: purple hue 250-310, S >= 0.38, V >= 0.40, min_pixels 30, max_sigma_px 12; tags about 100-200
+pixels each. Each posture was held for 30 s; "settled" leaves out the first seconds of each hold. The means below were
+computed by hand from the pasted logs; `tools/posture_summary.py` produces the same table from a recording file.
+
+| Recording | Hold (what was actually done) | Settled mean CVA (deg) | Valid seconds |
+|---|---|---|---|
+| 1 | upright | about 77 | 19 of 28 |
+| 1 | head forward (file label said trunk_lean_head_neutral; misread) | 57.6 | 28 of 28 |
+| 1 | upright | 72.2 | 27 of 29 |
+| 1 | head forward, trunk upright | 55.3 | 29 of 29 |
+| 1 | upright | 79.4 | 27 of 28 |
+| 1 | both (rounded back, head down) | 54.4 | 28 of 28 |
+| 1 | upright | 85.9 | 26 of 28 |
+| 2 | upright | 80.7 | 17 of 27 |
+| 2 | trunk lean, head neutral | 77.3 | 24 of 27 |
+| 2 | upright | 78.1 | 27 of 27 |
+| 2 | both | about 44 (38-53; steadiest stretch about 41) | 27 of 27 |
+| 2 | upright | 72.5 | 28 of 28 |
+
+**Findings (camera only):**
+- The angle follows the head: upright 72-86, head forward 55-58, both 41-54 across the two recordings.
+- Trunk lean with a neutral head barely moved it (77 vs 72-81 upright), so the two-tag angle was not fooled by that lean.
+  The size of the lean was not measured (no IMU data yet), so a larger lean is still untested.
+- "Upright" is not one number: it varied 72-86 between holds, so a per-session upright baseline is needed (fusion/calibration).
+- Valid readings were about 93% (recording 1) and 90% (recording 2); lost seconds are mostly one tag dropping out
+  (the neck tag shrinks to 45-125 pixels when it tilts away).
+
+**Not done:** IMU pitch alongside the angle, fused/IMU-only/camera-only confusion matrices, definitions of positive and
+negative classes, different people or lighting. This is not the accuracy evaluation.
